@@ -1,0 +1,80 @@
+timestamp_utc: '2026-05-09T16:27:47.132479+00:00'
+transform:
+  name: T_base_board
+  parent_frame: follower/base_link
+  child_frame: calibration_board
+  translation_xyz:
+  - 0.41879198422962544
+  - 0.07192406334503366
+  - 0.02541961716026983
+  rotation_matrix:
+  - - 0.022899055528320215
+    - -0.9974520877313778
+    - 0.06756453164365481
+  - - -0.9997274778106847
+    - -0.02253962347268474
+    - 0.006077457033691782
+  - - -0.004539093102997342
+    - -0.0676852868356567
+    - -0.9976963959941808
+  quaternion_xyzw:
+  - 0.7146913800717036
+  - -0.6986160814412262
+  - 0.022046382640831013
+  - -0.02580230639620559
+board:
+  source: caib.io ChArUco marker-board print
+  dictionary: DICT_5X5_100
+  start_id: 2
+  cols: 11
+  rows: 8
+  square_m: 0.034
+  marker_m: 0.025
+  width_m: 0.374
+  height_m: 0.272
+  corner_layout: tl_bl_br
+capture:
+  base_frame: follower/base_link
+  tool_frame: follower/gripper_frame_link
+  tool_offset_xyz_in_tool_frame:
+  - 0.0
+  - 0.0
+  - 0.0
+  samples_per_point: 7
+  sample_period_s: 0.04
+points_xyz_in_base:
+  top_left:
+  - 0.41879198422962544
+  - 0.07192406334503366
+  - 0.02541961716026983
+  bottom_left:
+  - 0.15539215260232586
+  - 0.06244958552776758
+  - 0.007524326506266839
+  bottom_right:
+  - 0.1640410236174095
+  - -0.3151430184608987
+  - 0.005809931311027119
+point_std_xyz_m:
+  top_left:
+  - 0.0
+  - 0.0
+  - 0.0
+  bottom_left:
+  - 0.0
+  - 0.0
+  - 0.0
+  bottom_right:
+  - 0.00010405579186887724
+  - 0.00028625997704134277
+  - 0.00038924207399170435
+quality:
+  measured_width_m: 0.3776955344025963
+  expected_width_m: 0.374
+  width_source: bottom_left_to_bottom_right
+  measured_height_m: 0.2641769832116168
+  expected_height_m: 0.272
+  raw_xy_angle_deg: 89.23621647346751
+  check_point_name: null
+  check_point_predicted_xyz: null
+  check_point_error_m: null

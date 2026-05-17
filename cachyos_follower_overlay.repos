@@ -1,0 +1,32 @@
+repositories:
+  ros2_control:
+    type: git
+    url: https://github.com/ros-controls/ros2_control.git
+    version: jazzy
+  ros2_controllers:
+    type: git
+    url: https://github.com/ros-controls/ros2_controllers.git
+    version: jazzy
+  realtime_tools:
+    type: git
+    url: https://github.com/ros-controls/realtime_tools.git
+    version: jazzy
+  diagnostics:
+    type: git
+    url: https://github.com/ros/diagnostics.git
+    version: ros2-jazzy
+  generate_parameter_library:
+    type: git
+    url: https://github.com/PickNikRobotics/generate_parameter_library.git
+    version: main
+  RSL:
+    type: git
+    url: https://github.com/PickNikRobotics/RSL.git
+    version: main
+  cpp_polyfills:
+    type: git
+    url: https://github.com/PickNikRobotics/cpp_polyfills.git
+    version: main
+  backward_ros:
+    type: git
+    url: https://github.com/pal-robotics/backward_ros.git

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Heal GoPro Webcam
+Comment=Start GoPro webcam mode and repair /dev/video42 streaming
+Exec=gnome-terminal --title="Heal GoPro Webcam" -- bash -lc "/home/dell/bin/heal_gopro_webcam.sh; echo; read -rp 'Press Enter to close...'"
+Icon=camera-video
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;
+Keywords=gopro;webcam;so101;camera;

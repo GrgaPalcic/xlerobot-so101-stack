@@ -1,0 +1,14 @@
+string prompt
+uint32 top_k
+uint32 grasp_index
+bool execute
+float64 pregrasp_offset_m
+float64 plan_time_s
+---
+bool success
+bool planned
+bool executed
+string message
+so101_grasp_msgs/GraspCandidate selected_grasp
+geometry_msgs/PoseStamped pregrasp_pose
+trajectory_msgs/JointTrajectory trajectory

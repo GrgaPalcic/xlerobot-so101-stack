@@ -3,6 +3,10 @@ manipulator:
   kinematics_solver_timeout: 0.2
   kinematics_solver_attempts: 10
   position_scale: 1.0
-  rotation_scale: 0.5
+  # SO-101 exposes 5 arm DOF + a separate gripper controller, so a generic
+  # 6D grasp pose is usually overconstrained. Keep MoveIt IK position-first;
+  # grasp yaw/pitch are still sampled by the grasp planner as soft strategy
+  # hints, but IK feasibility must not require exact orientation.
+  rotation_scale: 0.0
   approximate: true           # return best-effort solution, don't fail
   mode: global                # global search (like DLS with random restarts)

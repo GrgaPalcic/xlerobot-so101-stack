@@ -12,6 +12,15 @@
 
     lpf_alpha: 1.0 # 1.0 off; try 0.3 if jittery
 
+    # Remap calibrated leader gripper travel to calibrated follower travel.
+    # Endpoints are ROS radians converted from the latest raw gripper-only calibration.
+    gripper_map_enabled: true
+    gripper_joint_name: "gripper"
+    gripper_leader_open: -0.740913
+    gripper_leader_close: 1.170427
+    gripper_follower_open: -0.805340
+    gripper_follower_close: 1.500233
+
     # Joint Names
     arm_joints:
       - "shoulder_pan"

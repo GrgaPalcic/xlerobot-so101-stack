@@ -4,7 +4,9 @@
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -32,6 +34,12 @@ public:
     stale_timeout_s_ = declare_parameter<double>("stale_timeout_s", 0.25);
     point_dt_s_ = declare_parameter<double>("point_dt_s", 0.06);
     lpf_alpha_ = declare_parameter<double>("lpf_alpha", 1.0);
+    gripper_map_enabled_ = declare_parameter<bool>("gripper_map_enabled", false);
+    gripper_joint_name_ = declare_parameter<std::string>("gripper_joint_name", "gripper");
+    gripper_leader_open_ = declare_parameter<double>("gripper_leader_open", -0.174533);
+    gripper_leader_close_ = declare_parameter<double>("gripper_leader_close", 1.74533);
+    gripper_follower_open_ = declare_parameter<double>("gripper_follower_open", -0.174533);
+    gripper_follower_close_ = declare_parameter<double>("gripper_follower_close", 1.74533);
 
     arm_joints_ = declare_parameter<std::vector<std::string>>(
         "arm_joints", std::vector<std::string>{"shoulder_pan", "shoulder_lift", "elbow_flex",
@@ -43,6 +51,12 @@ public:
     RCLCPP_INFO(get_logger(), "Follower JTC: %s", follower_jtc_topic_.c_str());
     RCLCPP_INFO(get_logger(), "Rate: %.1f Hz, Arm joints: %zu", publish_rate_hz_,
                 arm_joints_.size());
+    if (gripper_map_enabled_) {
+      RCLCPP_INFO(get_logger(),
+                  "Gripper remap enabled: %s leader %.3f..%.3f -> follower %.3f..%.3f",
+                  gripper_joint_name_.c_str(), gripper_leader_open_, gripper_leader_close_,
+                  gripper_follower_open_, gripper_follower_close_);
+    }
 
     // ROS interfaces
     leader_sub_ = create_subscription<sensor_msgs::msg::JointState>(
@@ -72,6 +86,12 @@ private:
   double stale_timeout_s_{0.25};
   double point_dt_s_{0.02};
   double lpf_alpha_{1.0}; // 1.0 = no filtering
+  bool gripper_map_enabled_{false};
+  std::string gripper_joint_name_{"gripper"};
+  double gripper_leader_open_{-0.174533};
+  double gripper_leader_close_{1.74533};
+  double gripper_follower_open_{-0.174533};
+  double gripper_follower_close_{1.74533};
   bool have_filtered_{false};
   std::vector<std::string> arm_joints_;
   std::vector<double> filtered_;
@@ -86,6 +106,7 @@ private:
   bool initialized_{false};
   std::vector<int> arm_idx_;
   std::vector<double> raw_arm_;
+  int gripper_arm_idx_{-1};
   rclcpp::Time last_leader_stamp_{0, 0, RCL_ROS_TIME};
 
   void joint_state_callback(const sensor_msgs::msg::JointState::SharedPtr msg) {
@@ -97,6 +118,9 @@ private:
     // Cache targets
     for (size_t i = 0; i < arm_joints_.size(); ++i) {
       raw_arm_[i] = msg->position[arm_idx_[i]];
+    }
+    if (gripper_map_enabled_ && gripper_arm_idx_ >= 0) {
+      raw_arm_[gripper_arm_idx_] = map_gripper(raw_arm_[gripper_arm_idx_]);
     }
   }
 
@@ -116,11 +140,32 @@ private:
         return false;
       }
       arm_idx_[i] = it->second;
+      if (arm_joints_[i] == gripper_joint_name_) {
+        gripper_arm_idx_ = static_cast<int>(i);
+      }
+    }
+
+    if (gripper_map_enabled_ && gripper_arm_idx_ < 0) {
+      RCLCPP_ERROR(this->get_logger(), "Gripper remap enabled but joint '%s' is not in arm_joints",
+                   gripper_joint_name_.c_str());
+      return false;
     }
 
     initialized_ = true;
     RCLCPP_INFO(get_logger(), "Initialized: %zu arm joints", arm_joints_.size());
     return true;
+  }
+
+  double map_gripper(double leader_value) const {
+    const double denominator = gripper_leader_close_ - gripper_leader_open_;
+    if (std::abs(denominator) < 1e-6) {
+      return leader_value;
+    }
+    const double ratio = std::clamp((leader_value - gripper_leader_open_) / denominator, 0.0, 1.0);
+    const double mapped =
+        gripper_follower_open_ + ratio * (gripper_follower_close_ - gripper_follower_open_);
+    const auto bounds = std::minmax(gripper_follower_open_, gripper_follower_close_);
+    return std::clamp(mapped, bounds.first, bounds.second);
   }
 
   void control_loop() {

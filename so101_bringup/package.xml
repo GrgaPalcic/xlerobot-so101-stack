@@ -26,6 +26,9 @@
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
   <exec_depend>joint_trajectory_controller</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>so101_grasping</exec_depend>
+  <exec_depend>so101_moveit_config</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

@@ -1,0 +1,35 @@
+/**:
+  ros__parameters:
+    framerate: 30.0
+    io_method: "mmap"
+    pixel_format: "mjpeg2rgb"
+    av_device_format: "MJPEG"
+
+    brightness: -1
+    contrast: -1
+    saturation: -1
+    sharpness: -1
+    gain: -1
+
+    auto_white_balance: true
+    autoexposure: true
+    autofocus: false
+    focus: -1
+
+/follower/cam_wrist:
+  ros__parameters:
+    video_device: "/dev/video8"
+    image_width: 640
+    image_height: 480
+    frame_id: "follower/wrist_camera_optical_frame"
+    camera_name: "cam_wrist"
+
+/static_camera/cam_overhead:
+  ros__parameters:
+    video_device: "/dev/video0"
+    pixel_format: "yuyv2rgb"
+    av_device_format: "YUV422P"
+    image_width: 640
+    image_height: 480
+    frame_id: "follower/static_camera_optical_frame"
+    camera_name: "cam_overhead"

@@ -1,0 +1,137 @@
+timestamp_utc: '2026-05-09T16:47:28.062448+00:00'
+camera_name: follower/wrist_camera_optical_frame
+transform:
+  name: T_base_camera
+  parent_frame: follower/base_link
+  child_frame: follower/wrist_camera_optical_frame
+  translation_xyz:
+  - 0.03502603970655277
+  - 0.01604257950579696
+  - 0.30465247111774085
+  rotation_matrix:
+  - - -0.29980604173075576
+    - -0.683490032018834
+    - 0.6655506843754498
+  - - -0.9461255097498299
+    - 0.12356968009583796
+    - -0.2992942598207272
+  - - 0.12232275807208173
+    - -0.7194247078686592
+    - -0.6837142916202159
+  quaternion_xyzw:
+  - -0.5613240084375561
+  - 0.725790950178977
+  - -0.35089958321958087
+  - 0.18711583761460873
+inverse_transform:
+  name: T_camera_base
+  parent_frame: follower/wrist_camera_optical_frame
+  child_frame: follower/base_link
+  translation_xyz:
+  - -0.011586618486047091
+  - 0.24113208761842717
+  - 0.18978509574175928
+  rotation_matrix:
+  - - -0.29980604173075576
+    - -0.9461255097498299
+    - 0.12232275807208173
+  - - -0.683490032018834
+    - 0.12356968009583796
+    - -0.7194247078686592
+  - - 0.6655506843754498
+    - -0.2992942598207272
+    - -0.6837142916202159
+  quaternion_xyzw:
+  - -0.5613240084375561
+  - 0.725790950178977
+  - -0.35089958321958087
+  - -0.18711583761460873
+camera_to_board_pnp:
+  translation_xyz:
+  - -0.20208277900191857
+  - -0.05450792624283235
+  - 0.4296061726145971
+  rotation_matrix:
+  - - 0.9384471599697228
+    - 0.3120880240198486
+    - -0.1480472668040449
+  - - -0.13592174508272542
+    - 0.7276578130275208
+    - 0.672338743754718
+  - - 0.3175566203977304
+    - -0.6108315417554927
+    - 0.7252879569096538
+  quaternion_xyzw:
+  - -0.3483896489681304
+  - -0.12641469074848888
+  - -0.12163776542711789
+  - 0.9207867464710405
+mount_transform:
+  name: T_mount_camera
+  parent_frame: follower/gripper_frame_link
+  child_frame: follower/wrist_camera_optical_frame
+  translation_xyz:
+  - 0.0023449433597410273
+  - 0.07259405623188298
+  - -0.11936209378036347
+  rotation_matrix:
+  - - -0.9956356708740889
+    - -0.09199936080438609
+    - -0.01567572947863697
+  - - 0.09092066041102372
+    - -0.9183170438280241
+    - -0.3852625605030709
+  - - 0.021048619753474038
+    - -0.3850063955657662
+    - 0.9226738486485518
+  quaternion_xyzw:
+  - 0.0013715233668797518
+  - -0.1966245015235342
+  - 0.9793654276303948
+  - 0.046693505829073036
+  source_tf:
+    name: T_mount_parent_mount_child
+    parent_frame: follower/base_link
+    child_frame: follower/gripper_frame_link
+    translation_xyz:
+    - 0.11318672883151053
+    - -0.021056558586876727
+    - 0.19493799705217874
+    rotation_matrix:
+    - - 0.35094524307001695
+      - 0.3439902215730251
+      - 0.8709237416838904
+    - - 0.9353196308987002
+      - -0.08419162662815083
+      - -0.34364073981590926
+    - - -0.04488456774935068
+      - 0.935191155576146
+      - -0.3512874579459204
+    quaternion_xyzw:
+    - 0.6682859282605179
+    - 0.4785787783238389
+    - 0.3090141281609198
+    - 0.47839997870399875
+quality:
+  detected_markers: 38
+  inlier_points: 144
+  total_points: 152
+  mean_reprojection_error_px: 1.0355271100997925
+  max_reprojection_error_px: 2.916285514831543
+  image_width: 1280
+  image_height: 800
+  overlay_output: /home/dell/Documents/so101-ros-physical-ai/so101_bringup/config/cameras/extrinsics/cam_wrist_extrinsic_overlay.jpg
+  frame_output: /home/dell/Documents/so101-ros-physical-ai/so101_bringup/config/cameras/extrinsics/cam_wrist_extrinsic_frame.jpg
+inputs:
+  camera_info: /home/dell/Documents/so101-ros-physical-ai/so101_bringup/config/cameras/calibrations/cam_wrist_arducam_uc852.yaml
+  board_in_base: /home/dell/Documents/so101-ros-physical-ai/so101_bringup/config/cameras/extrinsics/board_in_base_touch.yaml
+  board_touch_quality:
+    measured_width_m: 0.3776955344025963
+    expected_width_m: 0.374
+    width_source: bottom_left_to_bottom_right
+    measured_height_m: 0.2641769832116168
+    expected_height_m: 0.272
+    raw_xy_angle_deg: 89.23621647346751
+    check_point_name: null
+    check_point_predicted_xyz: null
+    check_point_error_m: null

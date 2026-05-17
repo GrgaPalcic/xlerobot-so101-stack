@@ -1,0 +1,6 @@
+string prompt
+uint32 top_k
+---
+bool success
+string message
+so101_grasp_msgs/GraspCandidate[] grasps

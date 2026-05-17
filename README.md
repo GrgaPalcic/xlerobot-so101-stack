@@ -62,6 +62,17 @@ Complete ROS 2 stack for the SO-101 robot arm in a leader/follower configuration
 
 **End-to-end workflow:** [teleoperate the robot](so101_teleop/README.md) → [record episodes](episode_recorder/README.md) → [convert rosbags to LeRobot datasets](rosbag_to_lerobot/README.md) → [train policies](#training-lerobot) → [run learned policies](so101_inference/README.md)
 
+## Current Local Field Stack
+
+This repo now also contains a Dell/GPU dual-camera grasping integration with
+calibrated GoPro overhead and Arducam wrist cameras. Start with:
+
+- [docs/README.md](docs/README.md) for the documentation index
+- [docs/system_architecture.md](docs/system_architecture.md) for the stack map
+- [docs/field_calibration_report_2026-05-09.md](docs/field_calibration_report_2026-05-09.md) for the current calibrated TFs and quality numbers
+- [docs/operations_runbook.md](docs/operations_runbook.md) for Dell bringup and camera/grasp checks
+- [AGENTS.md](AGENTS.md) for future coding-agent context and safety notes
+
 ## Best first things to try
 
 After the [hardware setup guide](docs/hardware.md) and [installation](#installation), these are the fastest ways to get a feel for the repo:
@@ -232,6 +243,11 @@ The YAML files use a `joints:` top-level key with per-joint parameters such as `
 ---
 
 ## Installation
+
+> **Note**
+> The full stack is developed against Ubuntu 24.04 + ROS 2 Jazzy.
+> For a minimal native CachyOS/Arch follower-only bringup path, see
+> [docs/cachyos_follower_bringup.md](docs/cachyos_follower_bringup.md).
 
 ```bash
 # Clone (includes submodules)

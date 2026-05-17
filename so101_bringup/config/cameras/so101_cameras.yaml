@@ -4,6 +4,9 @@ cameras:
     camera_type: gscam # name of pkg 
     param_path: so101_gs_cam.yaml # path to camera specific config file
     namespace: follower # ns (info of cam location)
+    # Empty by default — each user calibrates their own camera. Override with
+    # your local calibration file using a custom cameras config.
+    camera_info_url: ""
 
   - name: cam_overhead
     camera_type: gscam

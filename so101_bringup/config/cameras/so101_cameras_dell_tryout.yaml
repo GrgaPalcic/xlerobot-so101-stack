@@ -1,0 +1,11 @@
+cameras:
+- name: cam_wrist
+  camera_type: opencv_compressed
+  param_path: /home/dell/Documents/so101-ros-physical-ai/so101_bringup/config/cameras/so101_opencv_cam_dell_tryout.yaml
+  namespace: follower
+  camera_info_url: file:///home/dell/Documents/so101-ros-physical-ai/so101_bringup/config/cameras/calibrations/cam_wrist_arducam_uc852.yaml
+- name: cam_overhead
+  camera_type: opencv_compressed
+  param_path: /home/dell/Documents/so101-ros-physical-ai/so101_bringup/config/cameras/so101_opencv_cam_dell_tryout.yaml
+  namespace: static_camera
+  camera_info_url: file:///home/dell/Documents/so101-ros-physical-ai/so101_bringup/config/cameras/calibrations/cam_overhead_gopro_hyperview.yaml

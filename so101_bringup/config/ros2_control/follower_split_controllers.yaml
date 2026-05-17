@@ -40,7 +40,23 @@ follower:
       open_loop_control: false
 
       constraints:
+        goal_time: 2.0
         stopped_velocity_tolerance: 0.01
+        shoulder_pan:
+          trajectory: 0.35
+          goal: 0.12
+        shoulder_lift:
+          trajectory: 0.35
+          goal: 0.12
+        elbow_flex:
+          trajectory: 0.35
+          goal: 0.12
+        wrist_flex:
+          trajectory: 0.35
+          goal: 0.12
+        wrist_roll:
+          trajectory: 0.35
+          goal: 0.12
 
   arm_forward_controller:
     ros__parameters:

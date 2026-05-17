@@ -1,7 +1,7 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -17,6 +17,7 @@ def generate_launch_description():
     joint_config_file = LaunchConfiguration("joint_config_file")
     controller_config_file = LaunchConfiguration("controller_config_file")
     arm_controller = LaunchConfiguration("arm_controller")
+    gripper_controller = LaunchConfiguration("gripper_controller")
 
     use_rviz = LaunchConfiguration("use_rviz")
     rviz_config = LaunchConfiguration("rviz_config")
@@ -97,6 +98,15 @@ def generate_launch_description():
         output="screen",
     )
 
+    gripper_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        namespace=namespace,
+        arguments=[gripper_controller],
+        output="screen",
+        condition=IfCondition(PythonExpression(["'", gripper_controller, "' != ''"])),
+    )
+
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -134,6 +144,11 @@ def generate_launch_description():
                 "arm_controller",
                 default_value="forward_controller",
                 description="Arm controller to use: trajectory_controller or forward_controller",
+            ),
+            DeclareLaunchArgument(
+                "gripper_controller",
+                default_value="",
+                description="Optional gripper action controller to spawn, e.g. gripper_controller",
             ),
             # --- Camera TF arguments ---
             DeclareLaunchArgument(
@@ -177,6 +192,7 @@ def generate_launch_description():
             ros2_control_node,
             joint_state_spawner,
             arm_controller_spawner,
+            gripper_controller_spawner,
             rviz_node,
         ]
     )

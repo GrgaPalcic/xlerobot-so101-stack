@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "grasp_server"
+version = "0.1.0"
+description = "GPU-side grasp perception server for SO-101 using DA3, Grounded SAM, and GraspNet."
+readme = {text = "GPU-side grasp perception server for SO-101 using metric DA3 depth, Grounded SAM segmentation, and GraspNet grasp generation.", content-type = "text/plain"}
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [
+    {name = "Dmitri Manajev", email = "dmitri@manajev.com"},
+]
+
+dependencies = [
+    "msgpack>=1.0",
+    "numpy>=1.24",
+    "opencv-python>=4.8",
+    "Pillow>=10.0",
+    "pyzmq>=25.0",
+    "requests>=2.31",
+    "safetensors>=0.4",
+    "scipy>=1.10",
+    "torch>=2.0",
+    "transformers>=4.44",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+grasp-server = "grasp_server.server:main"

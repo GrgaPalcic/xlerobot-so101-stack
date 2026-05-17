@@ -88,6 +88,17 @@ def _spawn_cameras(context):
                     output="screen",
                 )
             )
+        elif cam_type == "opencv_compressed":
+            nodes.append(
+                Node(
+                    package="so101_grasping",
+                    executable="compressed_camera_node",
+                    name=name,
+                    namespace=ns,
+                    parameters=[param_file, overrides],
+                    output="screen",
+                )
+            )
         elif cam_type == "realsense2_camera":
             nodes.append(
                 Node(

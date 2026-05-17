@@ -1,0 +1,15 @@
+/**:
+  ros__parameters:
+    server_address: "127.0.0.1:8091"
+    recv_timeout_ms: 120000
+    send_timeout_ms: 5000
+    default_top_k: 10
+    max_data_age_s: 0.5
+    fallback_fov_degrees: 60.0
+    base_frame: "follower/base_link"
+    overhead_camera_frame: "follower/static_camera_optical_frame"
+    wrist_camera_frame: "follower/wrist_camera_optical_frame"
+    overhead_image_topic: "/static_camera/image_raw/compressed"
+    wrist_image_topic: "/follower/image_raw/compressed"
+    overhead_camera_info_topic: "/static_camera/camera_info"
+    wrist_camera_info_topic: "/follower/camera_info"
