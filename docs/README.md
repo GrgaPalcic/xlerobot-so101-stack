@@ -20,6 +20,9 @@ docs/calibration_audit.md
 docs/xlerobot_dual_arm_calibration_runbook.md
   Clean second-run procedure for the two-arm XLeRobot-style calibration.
 
+docs/xlerobot_calibration_cli.md
+  Operator notes for the resumable `xlerobot-calib` CLI wizard.
+
 docs/field_calibration_report_2026-05-09.md
   The current Dell calibration run: board, grippers, cameras, TFs, quality.
 

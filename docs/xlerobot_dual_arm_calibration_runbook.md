@@ -18,6 +18,9 @@ Do not run motion commands from this document unless the real workspace is
 clear and the current step explicitly says it commands hardware. Most steps are
 read-only or hand-guided calibration.
 
+The same procedure is also available as a resumable CLI wizard through
+`xlerobot-calib`. See `docs/xlerobot_calibration_cli.md` for operator usage.
+
 ## Current Git Context
 
 The current working branch is:

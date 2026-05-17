@@ -37,6 +37,10 @@ Thumbs.db
 # --- Rerun (optional, if you generate local recordings/caches) ---
 *.rrd
 
+# --- Field calibration run artifacts ---
+field_runs/
+calibration_runs/
+
 # --- Pixi ---
 .pixi/
 
