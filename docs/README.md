@@ -17,6 +17,9 @@ docs/operations_runbook.md
 docs/calibration_audit.md
   Read-only joint/TF/camera/grasp snapshot audit before any real grasp motion.
 
+docs/xlerobot_dual_arm_calibration_runbook.md
+  Clean second-run procedure for the two-arm XLeRobot-style calibration.
+
 docs/field_calibration_report_2026-05-09.md
   The current Dell calibration run: board, grippers, cameras, TFs, quality.
 
