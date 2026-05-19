@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the small fixed workspace fiducial target for XLeRobot calibration.
+"""Generate rigid workspace ChArUco fiducial targets for XLeRobot calibration.
 
 Requires OpenCV with aruco support and Pillow:
 
@@ -9,6 +9,7 @@ Requires OpenCV with aruco support and Pillow:
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -18,6 +19,14 @@ from PIL import Image, ImageDraw, ImageFont
 
 DPI = 600
 MM_PER_INCH = 25.4
+
+
+@dataclass(frozen=True)
+class Target:
+    label: str
+    start_id: int
+    ids: list[int]
+    pattern_png: Path
 
 
 def mm_to_px(mm: float) -> int:
@@ -34,159 +43,236 @@ def font(size_px: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def make_marker(dictionary, marker_id: int, size_px: int) -> Image.Image:
-    if hasattr(cv2.aruco, "generateImageMarker"):
-        marker = cv2.aruco.generateImageMarker(dictionary, marker_id, size_px)
-    else:
-        marker = np.zeros((size_px, size_px), dtype=np.uint8)
-        cv2.aruco.drawMarker(dictionary, marker_id, size_px, marker, 1)
-    return Image.fromarray(marker, mode="L").convert("RGB")
-
-
-def draw_centered_text(draw: ImageDraw.ImageDraw, xy: tuple[int, int], text: str, font_obj) -> None:
+def draw_centered_text(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    text: str,
+    font_obj: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+) -> None:
     bbox = draw.textbbox((0, 0), text, font=font_obj)
     width = bbox[2] - bbox[0]
     height = bbox[3] - bbox[1]
     draw.text((xy[0] - width // 2, xy[1] - height // 2), text, fill=(0, 0, 0), font=font_obj)
 
 
+def board_marker_count(cols: int, rows: int) -> int:
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_100)
+    board = cv2.aruco.CharucoBoard((cols, rows), 1.0, 0.7, dictionary)
+    return int(len(board.getIds()))
+
+
+def make_charuco_pattern(
+    *,
+    cols: int,
+    rows: int,
+    square_mm: float,
+    marker_mm: float,
+    start_id: int,
+    output: Path,
+) -> Target:
+    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_100)
+    marker_count = board_marker_count(cols, rows)
+    ids = np.arange(start_id, start_id + marker_count, dtype=np.int32)
+    if ids[-1] >= 100:
+        raise ValueError(f"DICT_5X5_100 only has ids 0-99, got id {int(ids[-1])}")
+
+    board = cv2.aruco.CharucoBoard(
+        (cols, rows),
+        square_mm / 1000.0,
+        marker_mm / 1000.0,
+        dictionary,
+        ids,
+    )
+    pattern_w_px = mm_to_px(cols * square_mm)
+    pattern_h_px = mm_to_px(rows * square_mm)
+    image = board.generateImage((pattern_w_px, pattern_h_px), marginSize=0, borderBits=1)
+    pattern = Image.fromarray(image, mode="L").convert("RGB")
+    pattern.save(output, dpi=(DPI, DPI))
+
+    return Target(
+        label="",
+        start_id=start_id,
+        ids=[int(value) for value in ids],
+        pattern_png=output,
+    )
+
+
+def paginate_targets(
+    *,
+    targets: list[Target],
+    cols: int,
+    rows: int,
+    square_mm: float,
+    marker_mm: float,
+    page_width_mm: float,
+    page_height_mm: float,
+    output_dir: Path,
+    base: str,
+) -> list[Path]:
+    page_w_px = mm_to_px(page_width_mm)
+    page_h_px = mm_to_px(page_height_mm)
+    pattern_w_px = mm_to_px(cols * square_mm)
+    pattern_h_px = mm_to_px(rows * square_mm)
+    title_font = font(mm_to_px(3.0))
+    label_font = font(mm_to_px(2.8))
+
+    pages: list[Image.Image] = []
+    page_pngs: list[Path] = []
+
+    slots_per_page = 2
+    for page_index in range((len(targets) + slots_per_page - 1) // slots_per_page):
+        page = Image.new("RGB", (page_w_px, page_h_px), "white")
+        draw = ImageDraw.Draw(page)
+        draw_centered_text(
+            draw,
+            (page_w_px // 2, mm_to_px(10.0)),
+            "XLeRobot workspace ChArUco plates - print at 100%, no scaling",
+            title_font,
+        )
+
+        page_targets = targets[page_index * slots_per_page : (page_index + 1) * slots_per_page]
+        y_positions = [mm_to_px(24.0), mm_to_px(156.0)]
+        if len(page_targets) == 1:
+            y_positions = [mm_to_px(70.0)]
+
+        for target, y in zip(page_targets, y_positions):
+            x = (page_w_px - pattern_w_px) // 2
+            pattern = Image.open(target.pattern_png).convert("RGB")
+            page.paste(pattern, (x, y))
+
+            target_label = target.label or f"Plate {chr(ord('A') + targets.index(target))}"
+            marker_range = f"ids {target.ids[0]}-{target.ids[-1]}"
+            draw_centered_text(
+                draw,
+                (page_w_px // 2, y - mm_to_px(5.0)),
+                (
+                    f"{target_label} | DICT_5X5_100 | {marker_range} | "
+                    f"{cols}x{rows} | square {square_mm:g} mm | marker {marker_mm:g} mm"
+                ),
+                label_font,
+            )
+
+        page_png = output_dir / f"{base}_page{page_index + 1}.png"
+        page.save(page_png, dpi=(DPI, DPI))
+        page_pngs.append(page_png)
+        pages.append(page)
+
+    pdf = output_dir / f"{base}_a4.pdf"
+    pages[0].save(pdf, "PDF", resolution=DPI, save_all=True, append_images=pages[1:])
+    return page_pngs + [pdf]
+
+
 def generate(args: argparse.Namespace) -> list[Path]:
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    dictionary = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_5X5_100)
+    start_ids = [int(value) for value in args.start_ids.split(",") if value.strip()]
+    if not start_ids:
+        raise ValueError("--start-ids must contain at least one marker id")
+
     pattern_w_mm = args.cols * args.square_mm
     pattern_h_mm = args.rows * args.square_mm
-    pattern_w_px = mm_to_px(pattern_w_mm)
-    pattern_h_px = mm_to_px(pattern_h_mm)
-    square_px = mm_to_px(args.square_mm)
-    marker_px = mm_to_px(args.marker_mm)
-    inset_px = (square_px - marker_px) // 2
-
-    pattern = Image.new("RGB", (pattern_w_px, pattern_h_px), "white")
-    draw = ImageDraw.Draw(pattern)
-
-    grid_color = (150, 150, 150)
-    for row in range(args.rows):
-        for col in range(args.cols):
-            x0 = col * square_px
-            y0 = row * square_px
-            x1 = x0 + square_px
-            y1 = y0 + square_px
-            if (row + col) % 2 == 0:
-                draw.rectangle((x0, y0, x1, y1), fill=(245, 245, 245))
-            draw.rectangle((x0, y0, x1, y1), outline=grid_color, width=max(1, mm_to_px(0.10)))
-
-    marker_id = args.start_id
-    used_ids: list[int] = []
-    for row in range(args.rows):
-        marker_cols = range(0, args.cols, 2) if row % 2 == 0 else range(1, args.cols, 2)
-        for col in marker_cols:
-            x = col * square_px + inset_px
-            y = row * square_px + inset_px
-            marker = make_marker(dictionary, marker_id, marker_px)
-            pattern.paste(marker, (x, y))
-            used_ids.append(marker_id)
-            marker_id += 1
-
-    border = max(2, mm_to_px(0.35))
-    draw.rectangle((0, 0, pattern_w_px - 1, pattern_h_px - 1), outline=(0, 0, 0), width=border)
-
-    base = f"xlerobot_world_target_{args.cols}x{args.rows}_{args.square_mm:g}mm_aruco5x5_100_id{args.start_id}"
-    pattern_png = out_dir / f"{base}_pattern.png"
-    pattern.save(pattern_png, dpi=(DPI, DPI))
-
-    page_w_px = mm_to_px(args.page_width_mm)
-    page_h_px = mm_to_px(args.page_height_mm)
-    page = Image.new("RGB", (page_w_px, page_h_px), "white")
-    page_draw = ImageDraw.Draw(page)
-    title_font = font(mm_to_px(4.0))
-    body_font = font(mm_to_px(3.0))
-    small_font = font(mm_to_px(2.4))
-
-    x = (page_w_px - pattern_w_px) // 2
-    y = mm_to_px(28.0)
-    page.paste(pattern, (x, y))
-
-    draw_centered_text(
-        page_draw,
-        (page_w_px // 2, mm_to_px(13.0)),
-        "XLeRobot world fiducial target - print at 100%, no scaling",
-        title_font,
-    )
-    draw_centered_text(
-        page_draw,
-        (page_w_px // 2, mm_to_px(20.0)),
-        (
-            f"DICT_5X5_100 ids {used_ids[0]}-{used_ids[-1]} | "
-            f"{args.cols}x{args.rows} squares | square {args.square_mm:g} mm | marker {args.marker_mm:g} mm"
-        ),
-        body_font,
+    marker_count = board_marker_count(args.cols, args.rows)
+    base = (
+        f"xlerobot_world_targets_{args.cols}x{args.rows}_{args.square_mm:g}mm_"
+        f"aruco5x5_100_ids{start_ids[0]}-{start_ids[-1] + marker_count - 1}"
     )
 
-    label_y = y + pattern_h_px + mm_to_px(8.0)
-    draw_centered_text(
-        page_draw,
-        (page_w_px // 2, label_y),
-        f"Outer pattern size: {pattern_w_mm:.1f} mm x {pattern_h_mm:.1f} mm. Touch/check the outer black rectangle corners.",
-        body_font,
-    )
-    draw_centered_text(
-        page_draw,
-        (page_w_px // 2, label_y + mm_to_px(6.0)),
-        "Mount this print to a rigid flat plate. Do not laminate with uneven bubbles.",
-        small_font,
-    )
+    targets: list[Target] = []
+    outputs: list[Path] = []
+    for index, start_id in enumerate(start_ids):
+        label = f"Plate {chr(ord('A') + index)}"
+        pattern_png = out_dir / (
+            f"xlerobot_world_target_{label[-1]}_{args.cols}x{args.rows}_"
+            f"{args.square_mm:g}mm_aruco5x5_100_ids{start_id}-{start_id + marker_count - 1}_pattern.png"
+        )
+        target = make_charuco_pattern(
+            cols=args.cols,
+            rows=args.rows,
+            square_mm=args.square_mm,
+            marker_mm=args.marker_mm,
+            start_id=start_id,
+            output=pattern_png,
+        )
+        targets.append(
+            Target(
+                label=label,
+                start_id=target.start_id,
+                ids=target.ids,
+                pattern_png=target.pattern_png,
+            )
+        )
+        outputs.append(pattern_png)
 
-    ruler_x = x
-    ruler_y = label_y + mm_to_px(16.0)
-    ruler_len = mm_to_px(100.0)
-    page_draw.line((ruler_x, ruler_y, ruler_x + ruler_len, ruler_y), fill=(0, 0, 0), width=max(2, mm_to_px(0.25)))
-    for tick_mm in range(0, 101, 10):
-        tx = ruler_x + mm_to_px(float(tick_mm))
-        tick_h = mm_to_px(4.0 if tick_mm % 50 == 0 else 2.5)
-        page_draw.line((tx, ruler_y - tick_h, tx, ruler_y + tick_h), fill=(0, 0, 0), width=max(1, mm_to_px(0.18)))
-    draw_centered_text(page_draw, (ruler_x + ruler_len // 2, ruler_y + mm_to_px(8.0)), "100 mm print verification ruler", small_font)
-
-    page_png = out_dir / f"{base}_a4.png"
-    page_pdf = out_dir / f"{base}_a4.pdf"
-    page.save(page_png, dpi=(DPI, DPI))
-    page.save(page_pdf, "PDF", resolution=DPI)
+    outputs.extend(
+        paginate_targets(
+            targets=targets,
+            cols=args.cols,
+            rows=args.rows,
+            square_mm=args.square_mm,
+            marker_mm=args.marker_mm,
+            page_width_mm=args.page_width_mm,
+            page_height_mm=args.page_height_mm,
+            output_dir=out_dir,
+            base=base,
+        )
+    )
 
     readme = out_dir / "README_xlerobot_world_target.md"
     readme.write_text(
         "\n".join(
             [
-                "# XLeRobot World Fiducial Target",
+                "# XLeRobot World Fiducial Targets",
+                "",
+                "These are small rigid workspace ChArUco targets for the dual-arm calibration run.",
                 "",
                 f"- dictionary: DICT_5X5_100",
-                f"- marker ids: {used_ids[0]}-{used_ids[-1]}",
+                f"- plates: {', '.join(target.label for target in targets)}",
+                f"- marker ids per plate: {', '.join(f'{target.label}={target.ids[0]}-{target.ids[-1]}' for target in targets)}",
                 f"- squares: {args.cols} x {args.rows}",
+                f"- ChArUco corners: {(args.cols - 1) * (args.rows - 1)}",
+                f"- ArUco markers per plate: {marker_count}",
                 f"- square size: {args.square_mm:g} mm",
                 f"- marker size: {args.marker_mm:g} mm",
                 f"- outer pattern size: {pattern_w_mm:.1f} mm x {pattern_h_mm:.1f} mm",
                 "",
                 "Print the PDF at 100% / actual size. Disable fit-to-page and borderless scaling.",
-                "After printing, verify the ruler is exactly 100 mm and the outer pattern is exactly 140 mm x 100 mm.",
-                "Mount the print to a rigid flat plate before calibration.",
+                "Measure the printed ChArUco squares with calipers. Each square should be 20.0 mm.",
+                "Mount each selected print to a rigid flat plate before calibration.",
                 "",
-                "Use these runbook constants:",
+                "Use Plate A by default. If the print quality, mounting, glare, or detection is poor,",
+                "switch to Plate B or Plate C and change only WORLD_START_ID.",
+                "",
+                "Print file:",
+                "",
+                f"```text",
+                f"{base}_a4.pdf",
+                f"```",
+                "",
+                "Use these runbook constants for Plate A:",
                 "",
                 "```bash",
                 f"export WORLD_COLS={args.cols}",
                 f"export WORLD_ROWS={args.rows}",
                 f"export WORLD_SQUARE_M={args.square_mm / 1000.0:.6f}",
                 f"export WORLD_MARKER_M={args.marker_mm / 1000.0:.6f}",
-                f"export WORLD_START_ID={args.start_id}",
-                f"export WORLD_MARKER_COUNT={len(used_ids)}",
+                f"export WORLD_START_ID={targets[0].start_id}",
+                f"export WORLD_MARKER_COUNT={marker_count}",
                 "export WORLD_DICT=DICT_5X5_100",
+                "```",
+                "",
+                "Alternative start IDs:",
+                "",
+                "```text",
+                *[f"{target.label}: WORLD_START_ID={target.start_id}" for target in targets],
                 "```",
                 "",
             ]
         ),
         encoding="utf-8",
     )
-    return [pattern_png, page_png, page_pdf, readme]
+    outputs.append(readme)
+    return outputs
 
 
 def parse_args() -> argparse.Namespace:
@@ -196,7 +282,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rows", type=int, default=5)
     parser.add_argument("--square-mm", type=float, default=20.0)
     parser.add_argument("--marker-mm", type=float, default=14.0)
-    parser.add_argument("--start-id", type=int, default=50)
+    parser.add_argument("--start-ids", default="49,66,83")
     parser.add_argument("--page-width-mm", type=float, default=210.0)
     parser.add_argument("--page-height-mm", type=float, default=297.0)
     return parser.parse_args()
@@ -210,4 +296,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

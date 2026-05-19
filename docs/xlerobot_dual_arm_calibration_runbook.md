@@ -137,24 +137,28 @@ intrinsics target:
     marker count: 44
 
 workspace/world target:
-  smaller rigid caib.io marker board, not a single ArUco marker
+  smaller rigid ChArUco board, not a single ArUco marker
   must be fixed to the table/common base and reachable by both arms
-  recommended starting size:
+  recommended Plate A:
     cols: 7
     rows: 5
     square: 0.020 m
     marker: 0.014 m
     dictionary: DICT_5X5_100
-    start id: 50
-    marker count: 18
+    start id: 49
+    marker count: 17
     physical pattern: 0.140 m x 0.100 m
 ```
 
 The print-ready version used by this runbook is:
 
 ```text
-docs/assets/fiducials/xlerobot_world_target_7x5_20mm_aruco5x5_100_id50_a4.pdf
+docs/assets/fiducials/xlerobot_world_targets_7x5_20mm_aruco5x5_100_ids49-99_a4.pdf
 ```
+
+The PDF contains three independent plates. Use Plate A by default. If print
+quality, mounting, glare, or detection is poor, use Plate B or Plate C and
+change only `WORLD_START_ID` to match the plate label.
 
 If the GoPro sees too few markers on the 7 x 5 target, print a 9 x 7 version
 with the same square and marker sizes. That gives 32 markers and a 0.180 m x
@@ -660,8 +664,8 @@ export WORLD_COLS=7
 export WORLD_ROWS=5
 export WORLD_SQUARE_M=0.020
 export WORLD_MARKER_M=0.014
-export WORLD_START_ID=50
-export WORLD_MARKER_COUNT=18
+export WORLD_START_ID=49
+export WORLD_MARKER_COUNT=17
 export WORLD_DICT=DICT_5X5_100
 
 python3 - <<'PY'
