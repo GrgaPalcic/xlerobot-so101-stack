@@ -150,6 +150,12 @@ workspace/world target:
     physical pattern: 0.140 m x 0.100 m
 ```
 
+The print-ready version used by this runbook is:
+
+```text
+docs/assets/fiducials/xlerobot_world_target_7x5_20mm_aruco5x5_100_id50_a4.pdf
+```
+
 If the GoPro sees too few markers on the 7 x 5 target, print a 9 x 7 version
 with the same square and marker sizes. That gives 32 markers and a 0.180 m x
 0.140 m pattern.

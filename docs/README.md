@@ -23,6 +23,9 @@ docs/xlerobot_dual_arm_calibration_runbook.md
 docs/xlerobot_calibration_cli.md
   Operator notes for the resumable `xlerobot-calib` CLI wizard.
 
+docs/assets/fiducials/
+  Print-ready small world fiducial target for the XLeRobot calibration run.
+
 docs/field_calibration_report_2026-05-09.md
   The current Dell calibration run: board, grippers, cameras, TFs, quality.
 
