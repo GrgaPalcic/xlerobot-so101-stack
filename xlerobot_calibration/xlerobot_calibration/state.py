@@ -35,8 +35,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "world_rows": 5,
     "world_square_m": 0.020,
     "world_marker_m": 0.014,
-    "world_start_id": 50,
-    "world_marker_count": 18,
+    "world_start_id": 49,
+    "world_marker_count": 17,
     "world_dict": "DICT_5X5_100",
     "grasp_server_address": "127.0.0.1:8091",
     "workspace_bounds": "-0.50 0.50 -0.35 0.35 -0.05 0.50",
@@ -196,4 +196,3 @@ def mark_step(
     )
     if returncode is not None:
         record["returncode"] = int(returncode)
-
