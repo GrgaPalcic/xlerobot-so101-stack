@@ -25,9 +25,10 @@ Dell robot host
     files. Treat it as a legacy source/backup until it is reconciled.
 
   /home/dell/Documents/so101-ros-physical-ai-xlerobot-calib
-    Clean separate worktree created for the two-arm XLeRobot calibration CLI.
-    Use this for the current two-arm calibration run until a shared remote fork
-    is configured and all machines can clone/pull the same branch.
+    Separate git worktree of the same SO-101 repository, checked out on the
+    xlerobot/calibration-cli branch. This is not a different repository. Use
+    this for the current two-arm calibration run until a shared remote fork is
+    configured and all machines can clone/pull the same branch.
 
   /home/dell/Documents/lerobot
     LeRobot checkout used for SO-101 motor setup and LeRobot arm calibration.
@@ -43,9 +44,29 @@ Dell robot host
     two-arm calibration has been validated end to end.
 ```
 
-Last verified Dell state was from 2026-05-20. On 2026-05-22 the Dell host was
-not reachable over SSH from the local machine, so refresh the inventory before
-making destructive cleanup decisions.
+Last verified Dell state: 2026-05-22 03:15 CEST.
+
+## Repository Vs Branch Vs Worktree
+
+These three concepts caused most of the confusion:
+
+```text
+repository
+  The whole git project: history, branches, tags, files.
+
+branch
+  A named line of development inside that repository.
+  xlerobot/calibration-cli is a branch inside the SO-101 repository.
+
+worktree
+  A second folder checked out from the same repository object database.
+  Dell uses this so main can remain in /home/dell/Documents/so101-ros-physical-ai
+  while xlerobot/calibration-cli is checked out in
+  /home/dell/Documents/so101-ros-physical-ai-xlerobot-calib.
+```
+
+So `xlerobot/calibration-cli` is not another repo. It is our active branch in
+the SO-101 repo. It only looks separate on Dell because it has its own folder.
 
 ## Current Branch State
 
@@ -73,13 +94,36 @@ origin/main
   It has newer inference-side commits than local main.
 ```
 
+Observed on Dell on 2026-05-22:
+
+```text
+/home/dell/Documents/so101-ros-physical-ai
+  branch: main
+  state: dirty legacy field checkout with many modified/untracked files
+
+/home/dell/Documents/so101-ros-physical-ai-xlerobot-calib
+  branch: xlerobot/calibration-cli
+  state: dirty current calibration worktree
+  note: behind the local/GPU checkout until the latest commits are pushed or
+        transferred again
+
+/home/dell/Documents/lerobot
+  branch: main
+  state: dirty LeRobot checkout with local record script/edit
+
+/home/dell/Documents/lerobot-calib
+  not a git repository
+```
+
 The active `xlerobot/calibration-cli` branch has not been pushed to a shared
 remote yet. Dell received it via a git bundle, which is useful short-term but
 should not be the long-term synchronization method.
 
 ## Recommended Remote Layout
 
-Create or choose one lab-owned fork, then use it on every machine.
+Create or choose one lab-owned fork, then use it on every machine. This should
+be a fork of `legalaspro/so101-ros-physical-ai`, not a separate unrelated repo,
+unless the goal is to permanently sever upstream history.
 
 Recommended remotes:
 
@@ -125,6 +169,11 @@ git submodule update --init --recursive
 The local shell is not currently logged into GitHub through `gh`, so fork
 creation/pushing still needs either `gh auth login`, GitHub UI setup, or a
 pre-existing SSH remote URL.
+
+If a completely new GitHub repository is preferred instead of a fork, keep the
+same branch policy but create a new empty repo first and set it as `origin`.
+That is workable, but it loses GitHub's explicit fork relationship and makes
+upstream merges slightly more manual.
 
 ## Why The Wizard Started From Scratch
 
