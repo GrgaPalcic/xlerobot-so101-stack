@@ -7,7 +7,7 @@ so it can run reliably over SSH on the Dell robot host.
 ## Build
 
 ```bash
-cd /home/dell/Documents/so101-ros-physical-ai-xlerobot-calib
+cd /home/dell/Documents/xlerobot-so101-stack
 source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install --packages-select xlerobot_calibration
 source install/setup.bash
@@ -27,7 +27,7 @@ the current workspace install.
 On a colcon-built ROS 2 workspace, invoke the CLI through `ros2 run`:
 
 ```bash
-export XLEROBOT_WS=/home/dell/Documents/so101-ros-physical-ai-xlerobot-calib
+export XLEROBOT_WS=/home/dell/Documents/xlerobot-so101-stack
 export XLEROBOT_RUN=$XLEROBOT_WS/field_runs/xlerobot_printed_plate_20260520
 
 ros2 run xlerobot_calibration xlerobot-calib \

@@ -15,8 +15,8 @@ Primary robot host:
 ```text
 Dell laptop
 host: dell@192.168.1.73
-legacy repo: /home/dell/Documents/so101-ros-physical-ai
-current two-arm worktree: /home/dell/Documents/so101-ros-physical-ai-xlerobot-calib
+current two-arm checkout: /home/dell/Documents/xlerobot-so101-stack
+archived legacy repo: /home/dell/Documents/_so101_archive_20260522T014311Z/so101-ros-physical-ai
 calibration source: /home/dell/Documents/lerobot-calib
 LeRobot checkout: /home/dell/Documents/lerobot
 ROS: Jazzy
@@ -24,8 +24,8 @@ display: usually :1
 ```
 
 The legacy Dell repo accumulated the original one-arm local integration and
-dirty field files. The current two-arm calibration CLI was built in the
-`so101-ros-physical-ai-xlerobot-calib` worktree. See
+dirty field files, and is now archived. The current two-arm calibration CLI
+runs from the independent `xlerobot-so101-stack` checkout. See
 `docs/repository_topology.md` before moving code or deleting duplicate folders.
 
 Do not commit or document private passwords. SSH may already be configured in
@@ -38,7 +38,8 @@ Local/GPU development checkout:
 ```
 
 Do not use `/home/grga/Documents/so101-custom` as a source checkout. It was a
-mistaken working directory and is not a git repository.
+mistaken working directory, was not a git repository, and was removed on
+2026-05-22.
 
 GPU host:
 
@@ -231,7 +232,7 @@ rotation. In this repo the calibrated static TFs are published directly to:
 On the Dell host, always pin both workspace and output directory:
 
 ```bash
-export XLEROBOT_WS=/home/dell/Documents/so101-ros-physical-ai-xlerobot-calib
+export XLEROBOT_WS=/home/dell/Documents/xlerobot-so101-stack
 export XLEROBOT_RUN=$XLEROBOT_WS/field_runs/xlerobot_printed_plate_20260520
 
 cd "$XLEROBOT_WS"

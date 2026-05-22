@@ -86,7 +86,7 @@ Current source-of-truth docs:
 On the Dell robot host, pin the active two-arm run explicitly:
 
 ```bash
-export XLEROBOT_WS=/home/dell/Documents/so101-ros-physical-ai-xlerobot-calib
+export XLEROBOT_WS=/home/dell/Documents/xlerobot-so101-stack
 export XLEROBOT_RUN=$XLEROBOT_WS/field_runs/xlerobot_printed_plate_20260520
 
 cd "$XLEROBOT_WS"

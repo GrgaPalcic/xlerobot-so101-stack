@@ -15,20 +15,14 @@ local/GPU machine
     Current development checkout. This is where code/docs are edited first.
 
   /home/grga/Documents/so101-custom
-    Historical mistake path. It is not a git repository and currently only
-    contains tmp.zip. Do not use it as a source of truth.
+    Removed on 2026-05-22. It was a historical mistake path and not a git
+    repository.
 
 Dell robot host
-  /home/dell/Documents/so101-ros-physical-ai
-    Original Dell field checkout. This accumulated the one-arm local
-    integration, camera/grasp experiments, and many uncommitted/untracked field
-    files. Treat it as a legacy source/backup until it is reconciled.
-
-  /home/dell/Documents/so101-ros-physical-ai-xlerobot-calib
-    Separate git worktree of the same SO-101 repository, checked out on the
-    xlerobot/calibration-cli branch. This is not a different repository. Use
-    this for the current two-arm calibration run until a shared remote fork is
-    configured and all machines can clone/pull the same branch.
+  /home/dell/Documents/xlerobot-so101-stack
+    Current canonical Dell checkout cloned from the lab fork. This is an
+    independent clone, not a linked git worktree. Use this for the current
+    two-arm calibration run.
 
   /home/dell/Documents/lerobot
     LeRobot checkout used for SO-101 motor setup and LeRobot arm calibration.
@@ -39,12 +33,14 @@ Dell robot host
     this; copy selected outputs into run artifacts or generated ROS joint YAMLs
     when needed.
 
-  /home/dell/Documents/so101_calibration_backup_*
-    Backups of prior Dell calibration outputs. Keep these until the new
-    two-arm calibration has been validated end to end.
+  /home/dell/Documents/_so101_archive_20260522T014311Z
+    Archive folder containing the old dirty Dell SO-101 checkout, the temporary
+    linked calibration worktree, the old Arducam calibration sandbox, and the
+    prior calibration backup files. Do not delete until the new two-arm
+    calibration has been validated end to end.
 ```
 
-Last verified Dell state: 2026-05-22 03:15 CEST.
+Last verified Dell state: 2026-05-22 03:43 CEST.
 
 ## Repository Vs Branch Vs Worktree
 
@@ -60,13 +56,13 @@ branch
 
 worktree
   A second folder checked out from the same repository object database.
-  Dell uses this so main can remain in /home/dell/Documents/so101-ros-physical-ai
-  while xlerobot/calibration-cli is checked out in
-  /home/dell/Documents/so101-ros-physical-ai-xlerobot-calib.
+  Dell used this temporarily for the old
+  /home/dell/Documents/so101-ros-physical-ai-xlerobot-calib folder. The current
+  /home/dell/Documents/xlerobot-so101-stack folder is an independent clone.
 ```
 
 So `xlerobot/calibration-cli` is not another repo. It is our active branch in
-the SO-101 repo. It only looks separate on Dell because it has its own folder.
+the SO-101 repo. The Dell folder is now a normal clone of the lab fork.
 
 ## Current Branch State
 
@@ -98,14 +94,11 @@ Observed on Dell on 2026-05-22:
 
 ```text
 /home/dell/Documents/so101-ros-physical-ai
-  branch: main
-  state: dirty legacy field checkout with many modified/untracked files
+  moved to /home/dell/Documents/_so101_archive_20260522T014311Z/
 
-/home/dell/Documents/so101-ros-physical-ai-xlerobot-calib
+/home/dell/Documents/xlerobot-so101-stack
   branch: xlerobot/calibration-cli
-  state: dirty current calibration worktree
-  note: behind the local/GPU checkout until the latest commits are pushed or
-        transferred again
+  state: clean current calibration checkout
 
 /home/dell/Documents/lerobot
   branch: main
@@ -115,9 +108,9 @@ Observed on Dell on 2026-05-22:
   not a git repository
 ```
 
-The active `xlerobot/calibration-cli` branch has not been pushed to a shared
-remote yet. Dell received it via a git bundle, which is useful short-term but
-should not be the long-term synchronization method.
+The active `xlerobot/calibration-cli` branch is pushed to the lab fork at
+`git@github.com:GrgaPalcic/xlerobot-so101-stack.git`. Dell currently fetches
+that fork over HTTPS.
 
 ## Recommended Remote Layout
 
@@ -195,7 +188,7 @@ If you pass `--out`, that exact run directory is used:
 Always pin both variables on Dell:
 
 ```bash
-export XLEROBOT_WS=/home/dell/Documents/so101-ros-physical-ai-xlerobot-calib
+export XLEROBOT_WS=/home/dell/Documents/xlerobot-so101-stack
 export XLEROBOT_RUN=$XLEROBOT_WS/field_runs/xlerobot_printed_plate_20260520
 
 cd "$XLEROBOT_WS"
@@ -287,7 +280,7 @@ Dell:
 ssh dell@192.168.1.73 '
   for repo in \
     /home/dell/Documents/so101-ros-physical-ai \
-    /home/dell/Documents/so101-ros-physical-ai-xlerobot-calib \
+    /home/dell/Documents/xlerobot-so101-stack \
     /home/dell/Documents/lerobot \
     /home/dell/Documents/lerobot-calib
   do
