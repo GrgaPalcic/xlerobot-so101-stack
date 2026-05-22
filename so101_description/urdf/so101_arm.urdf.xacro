@@ -5,6 +5,7 @@
   <xacro:arg name="mesh_dir" default="package://so101_description/meshes"/>
   <xacro:arg name="add_transmissions" default="false"/>
   <xacro:arg name="use_ros2_control" default="false"/>
+  <xacro:arg name="control_variant" default="$(arg variant)"/> <!-- leader | follower; controls command interfaces -->
   <xacro:arg name="hardware_type" default="mock"/>
   <xacro:arg name="usb_port" default="/dev/ttyUSB0"/>
   <xacro:arg name="joint_config_file" default=""/>
@@ -20,6 +21,7 @@
   <!-- Convert args to properties for use in ${} expressions -->
   <xacro:property name="use_ros2_control" value="$(arg use_ros2_control)"/>
   <xacro:property name="variant" value="$(arg variant)"/>
+  <xacro:property name="control_variant" value="$(arg control_variant)"/>
   <xacro:property name="enable_static_cam" value="$(arg enable_static_cam)"/>
   <xacro:property name="enable_wrist_cam" value="$(arg enable_wrist_cam)"/>
 
@@ -55,7 +57,7 @@
 
   <xacro:if value="${use_ros2_control}">
     <xacro:so101_ros2_control
-      variant="${variant}"
+      variant="${control_variant}"
       hardware_type="$(arg hardware_type)"
       usb_port="$(arg usb_port)"
       joint_config_file="$(arg joint_config_file)"

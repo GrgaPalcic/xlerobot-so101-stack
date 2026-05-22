@@ -26,6 +26,7 @@ def generate_launch_description():
                 "xacro ",
                 xacro_file,
                 " variant:=follower",
+                " control_variant:=leader",
                 " use_ros2_control:=true",
                 " hardware_type:=",
                 hardware_type,

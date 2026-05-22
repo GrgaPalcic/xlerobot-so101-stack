@@ -240,14 +240,20 @@ ls -l /dev/ttyUSB* /dev/ttyACM* /dev/video* /dev/v4l/by-id/* 2>/dev/null | tee "
 v4l2-ctl --list-devices | tee "$OUT/logs/v4l2.txt"
 ```
 
-Find the arm ports using LeRobot:
+Record serial identities:
 
 ```bash
-cd /home/dell/Documents/lerobot
-source .venv/bin/activate
-lerobot-find-port | tee "$OUT/logs/lerobot_find_port_1.txt"
-lerobot-find-port | tee "$OUT/logs/lerobot_find_port_2.txt"
+ls -l /dev/serial/by-id/* /dev/serial/by-path/* /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | tee "$OUT/logs/serial_ports.txt"
+for dev in /dev/ttyUSB* /dev/ttyACM*; do
+  [ -e "$dev" ] || continue
+  name=$(basename "$dev")
+  udevadm info -q property -n "$dev" 2>/dev/null | sort | tee "$OUT/logs/${name}_udev.txt" || true
+done
 ```
+
+Do not run `lerobot-find-port` from the calibration wizard. It is an
+interactive unplug/replug helper and its prompt is hidden when command output is
+captured.
 
 Set environment variables after confirming identities:
 
@@ -261,6 +267,17 @@ export CENTER_GOPRO_DEV=/dev/video42
 ```
 
 Do not assume `/dev/ttyUSB0` and `/dev/ttyUSB1` stayed stable after reconnect.
+Many FE-URT-1/CH340 adapters expose the same USB serial string, so
+`/dev/serial/by-id` may identify only one of them. Prefer
+`/dev/serial/by-path` or custom udev names once the physical left/right mapping
+is known.
+
+If both arms are connected through one PCB and the PC exposes only one motor
+serial adapter, there is only one Linux port to set. That topology is valid only
+when the PCB exposes independently addressable buses or every servo on the
+shared bus has a globally unique ID. Two SO-101 arms with duplicate IDs 1..6 on
+one shared Feetech bus will collide and cannot be calibrated as separate
+left/right arms by the standard LeRobot commands below.
 
 ## Heal And Probe The GoPro
 

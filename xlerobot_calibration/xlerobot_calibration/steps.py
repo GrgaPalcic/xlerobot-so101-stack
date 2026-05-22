@@ -52,64 +52,91 @@ STEPS: tuple[Step, ...] = (
     Step(
         id="lerobot_find_ports",
         title="Find LeRobot arm ports",
-        description="Run LeRobot port discovery twice so the operator can identify left and right arms.",
+        description=(
+            "Record serial devices and decide the motor-bus topology. "
+            "Do not run lerobot-find-port inside this wizard; it waits for unplug/replug input."
+        ),
+        kind="manual",
         commands=(
-            "cd /home/dell/Documents/lerobot\n"
-            "source .venv/bin/activate\n"
-            "lerobot-find-port > {out}/logs/lerobot_find_port_1.txt 2>&1\n"
-            "lerobot-find-port > {out}/logs/lerobot_find_port_2.txt 2>&1",
+            "ls -l /dev/serial/by-id/* /dev/serial/by-path/* /dev/ttyUSB* /dev/ttyACM* 2>/dev/null "
+            "| tee {out}/logs/serial_ports.txt\n"
+            "for dev in /dev/ttyUSB* /dev/ttyACM*; do\n"
+            "  [ -e \"$dev\" ] || continue\n"
+            "  name=$(basename \"$dev\")\n"
+            "  udevadm info -q property -n \"$dev\" 2>/dev/null | sort | tee \"{out}/logs/$name\"_udev.txt || true\n"
+            "done\n"
+            "\n"
+            "# Port identity note:\n"
+            "# Many FE-URT-1/CH340 adapters expose the same USB serial string. If /dev/serial/by-id points to only\n"
+            "# one adapter even though two /dev/ttyUSB* devices exist, use /dev/serial/by-path or custom udev names.\n"
+            "#\n"
+            "# One-cable note:\n"
+            "# If both arms share one USB serial adapter, this wizard cannot discover separate left/right ports.\n"
+            "# That topology is usable only when the PCB exposes independently addressable buses or all servo IDs\n"
+            "# on the shared bus are globally unique. If both arms use SO-101 IDs 1..6 on one bus, they collide.\n"
+            "# Set left_port/right_port only after confirming the actual topology.",
         ),
     ),
     Step(
         id="setup_motors_left",
         title="Setup left arm motors",
-        description="Run LeRobot setup-motors for the left follower arm. This writes EEPROM.",
+        description=(
+            "Run LeRobot setup-motors for the left follower arm. This writes EEPROM and is interactive: "
+            "connect exactly one requested motor at a time."
+        ),
+        kind="manual",
         required_config=("left_port",),
         dangerous=True,
         commands=(
             "cd /home/dell/Documents/lerobot\n"
             "source .venv/bin/activate\n"
             "lerobot-setup-motors --robot.type=so101_follower --robot.port={left_port} "
-            "> {out}/logs/left_setup_motors.txt 2>&1",
+            "2>&1 | tee {out}/logs/left_setup_motors.txt",
         ),
     ),
     Step(
         id="setup_motors_right",
         title="Setup right arm motors",
-        description="Run LeRobot setup-motors for the right follower arm. This writes EEPROM.",
+        description=(
+            "Run LeRobot setup-motors for the right follower arm. This writes EEPROM and is interactive: "
+            "connect exactly one requested motor at a time."
+        ),
+        kind="manual",
         required_config=("right_port",),
         dangerous=True,
         commands=(
             "cd /home/dell/Documents/lerobot\n"
             "source .venv/bin/activate\n"
             "lerobot-setup-motors --robot.type=so101_follower --robot.port={right_port} "
-            "> {out}/logs/right_setup_motors.txt 2>&1",
+            "2>&1 | tee {out}/logs/right_setup_motors.txt",
         ),
     ),
     Step(
         id="calibrate_left",
         title="Calibrate left arm with LeRobot",
-        description="Run fresh LeRobot calibration for the left follower arm.",
+        description="Run fresh LeRobot calibration for the left follower arm. This is interactive.",
+        kind="manual",
         required_config=("left_port",),
         dangerous=True,
         commands=(
             "cd /home/dell/Documents/lerobot\n"
             "source .venv/bin/activate\n"
             "lerobot-calibrate --robot.type=so101_follower --robot.port={left_port} --robot.id=xlerobot_left "
-            "> {out}/logs/left_lerobot_calibrate.txt 2>&1",
+            "2>&1 | tee {out}/logs/left_lerobot_calibrate.txt",
         ),
     ),
     Step(
         id="calibrate_right",
         title="Calibrate right arm with LeRobot",
-        description="Run fresh LeRobot calibration for the right follower arm.",
+        description="Run fresh LeRobot calibration for the right follower arm. This is interactive.",
+        kind="manual",
         required_config=("right_port",),
         dangerous=True,
         commands=(
             "cd /home/dell/Documents/lerobot\n"
             "source .venv/bin/activate\n"
             "lerobot-calibrate --robot.type=so101_follower --robot.port={right_port} --robot.id=xlerobot_right "
-            "> {out}/logs/right_lerobot_calibrate.txt 2>&1",
+            "2>&1 | tee {out}/logs/right_lerobot_calibrate.txt",
         ),
     ),
     Step(
