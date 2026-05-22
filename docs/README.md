@@ -14,6 +14,10 @@ docs/system_architecture.md
 docs/operations_runbook.md
   What to launch, what to verify, and what to do when hardware/cameras fail.
 
+docs/repository_topology.md
+  Which machine/folder/branch is authoritative, and why calibration runs can
+  appear to restart when launched from a different checkout.
+
 docs/calibration_audit.md
   Read-only joint/TF/camera/grasp snapshot audit before any real grasp motion.
 

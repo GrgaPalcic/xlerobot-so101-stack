@@ -15,15 +15,30 @@ Primary robot host:
 ```text
 Dell laptop
 host: dell@192.168.1.73
-repo: /home/dell/Documents/so101-ros-physical-ai
+legacy repo: /home/dell/Documents/so101-ros-physical-ai
+current two-arm worktree: /home/dell/Documents/so101-ros-physical-ai-xlerobot-calib
 calibration source: /home/dell/Documents/lerobot-calib
 LeRobot checkout: /home/dell/Documents/lerobot
 ROS: Jazzy
 display: usually :1
 ```
 
+The legacy Dell repo accumulated the original one-arm local integration and
+dirty field files. The current two-arm calibration CLI was built in the
+`so101-ros-physical-ai-xlerobot-calib` worktree. See
+`docs/repository_topology.md` before moving code or deleting duplicate folders.
+
 Do not commit or document private passwords. SSH may already be configured in
 the local environment.
+
+Local/GPU development checkout:
+
+```text
+/home/grga/Documents/so101-ros-physical-ai
+```
+
+Do not use `/home/grga/Documents/so101-custom` as a source checkout. It was a
+mistaken working directory and is not a git repository.
 
 GPU host:
 
@@ -210,6 +225,27 @@ rotation. In this repo the calibrated static TFs are published directly to:
 5. Do not edit or reset servo EEPROM parameters casually. `joint_config_file`
    writes supported parameters to the motors at launch.
 6. Do not bake credentials into docs, scripts, launch files, or desktop files.
+
+## XLeRobot Calibration CLI
+
+On the Dell host, always pin both workspace and output directory:
+
+```bash
+export XLEROBOT_WS=/home/dell/Documents/so101-ros-physical-ai-xlerobot-calib
+export XLEROBOT_RUN=$XLEROBOT_WS/field_runs/xlerobot_printed_plate_20260520
+
+cd "$XLEROBOT_WS"
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+
+ros2 run xlerobot_calibration xlerobot-calib \
+  --workspace "$XLEROBOT_WS" \
+  --out "$XLEROBOT_RUN" \
+  status
+```
+
+If `--workspace` or `--out` changes, the wizard may appear to start from
+scratch because it is looking at a different `run_state.yaml`.
 
 ## Build and Test Norms
 

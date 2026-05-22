@@ -7,7 +7,7 @@ so it can run reliably over SSH on the Dell robot host.
 ## Build
 
 ```bash
-cd /home/dell/Documents/so101-ros-physical-ai
+cd /home/dell/Documents/so101-ros-physical-ai-xlerobot-calib
 source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install --packages-select xlerobot_calibration
 source install/setup.bash
@@ -15,33 +15,55 @@ source install/setup.bash
 
 ## Start A Run
 
+On a colcon-built ROS 2 workspace, invoke the CLI through `ros2 run`:
+
 ```bash
-xlerobot-calib wizard \
-  --workspace /home/dell/Documents/so101-ros-physical-ai
+export XLEROBOT_WS=/home/dell/Documents/so101-ros-physical-ai-xlerobot-calib
+export XLEROBOT_RUN=$XLEROBOT_WS/field_runs/xlerobot_printed_plate_20260520
+
+ros2 run xlerobot_calibration xlerobot-calib \
+  --workspace "$XLEROBOT_WS" \
+  --out "$XLEROBOT_RUN" \
+  wizard
+```
+
+For repeated commands, define a shell helper:
+
+```bash
+calib() {
+  ros2 run xlerobot_calibration xlerobot-calib \
+    --workspace "$XLEROBOT_WS" \
+    --out "$XLEROBOT_RUN" \
+    "$@"
+}
 ```
 
 The wizard creates or resumes:
 
 ```text
-field_runs/xlerobot_<RUN_ID>/run_state.yaml
+<XLEROBOT_RUN>/run_state.yaml
 ```
 
 Generated logs, images, touch solves, extrinsics, configs, bags, and reports
 stay under that run directory. `field_runs/` is ignored by git.
 
+If `--out` is omitted, the CLI looks for the latest
+`<workspace>/field_runs/xlerobot_*/run_state.yaml`. Running from a different
+checkout therefore makes it appear to start from scratch.
+
 ## Useful Commands
 
 ```bash
-xlerobot-calib doctor
-xlerobot-calib status
-xlerobot-calib show-config
-xlerobot-calib set-config left_port /dev/ttyUSB0
-xlerobot-calib set-config right_port /dev/ttyUSB1
-xlerobot-calib run-step device_inventory
-xlerobot-calib run-step generate_controller_configs
-xlerobot-calib run-step generate_world_files
-xlerobot-calib run-step generate_camera_config --dry-run
-xlerobot-calib export-report
+calib doctor
+calib status
+calib show-config
+calib set-config left_port /dev/ttyUSB0
+calib set-config right_port /dev/ttyUSB1
+calib run-step device_inventory
+calib run-step generate_controller_configs
+calib run-step generate_world_files
+calib run-step generate_camera_config --dry-run
+calib export-report
 ```
 
 Most commands accept `--workspace` and `--out` either before or after the
@@ -89,4 +111,3 @@ This package is designed to be extracted into a clean XLeRobot repository after
 one successful field pass. Until then, it deliberately reuses the current
 workspace scripts and ROS packages so the first implementation remains close to
 the working lab stack.
-

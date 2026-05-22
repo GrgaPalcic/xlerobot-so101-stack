@@ -64,14 +64,43 @@ Complete ROS 2 stack for the SO-101 robot arm in a leader/follower configuration
 
 ## Current Local Field Stack
 
-This repo now also contains a Dell/GPU dual-camera grasping integration with
-calibrated GoPro overhead and Arducam wrist cameras. Start with:
+This repo now also contains the local Dell/GPU grasping integration and the
+current two-arm XLeRobot calibration work. Treat this as a lab stack, not just
+the original upstream leader/follower demo.
+
+Current source-of-truth docs:
 
 - [docs/README.md](docs/README.md) for the documentation index
+- [docs/repository_topology.md](docs/repository_topology.md) for which folder,
+  branch, and machine is authoritative
 - [docs/system_architecture.md](docs/system_architecture.md) for the stack map
-- [docs/field_calibration_report_2026-05-09.md](docs/field_calibration_report_2026-05-09.md) for the current calibrated TFs and quality numbers
+- [docs/xlerobot_dual_arm_calibration_runbook.md](docs/xlerobot_dual_arm_calibration_runbook.md)
+  for the clean two-arm calibration process
+- [docs/xlerobot_calibration_cli.md](docs/xlerobot_calibration_cli.md) for the
+  resumable calibration CLI
+- [docs/field_calibration_report_2026-05-09.md](docs/field_calibration_report_2026-05-09.md)
+  for the prior one-arm calibrated TFs and quality numbers
 - [docs/operations_runbook.md](docs/operations_runbook.md) for Dell bringup and camera/grasp checks
 - [AGENTS.md](AGENTS.md) for future coding-agent context and safety notes
+
+On the Dell robot host, pin the active two-arm run explicitly:
+
+```bash
+export XLEROBOT_WS=/home/dell/Documents/so101-ros-physical-ai-xlerobot-calib
+export XLEROBOT_RUN=$XLEROBOT_WS/field_runs/xlerobot_printed_plate_20260520
+
+cd "$XLEROBOT_WS"
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+
+ros2 run xlerobot_calibration xlerobot-calib \
+  --workspace "$XLEROBOT_WS" \
+  --out "$XLEROBOT_RUN" \
+  status
+```
+
+Using a different checkout or omitting `--out` makes the calibration CLI look
+in a different `field_runs/` directory.
 
 ## Best first things to try
 
