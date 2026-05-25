@@ -655,8 +655,9 @@ cd /home/dell/Documents/xlerobot-so101-stack
 
 The wrapper reads ports, joint YAMLs, board dimensions, and output paths from
 the latest `field_runs/*/run_state.yaml`. To use a finer first step, append
-`--jog-step-m 0.001`. To avoid the independent top-right check, append
-`--corner-layout tl_bl_br`.
+`--jog-step-m 0.001`. Cartesian jogs are capped at 100 mm per click by default;
+use smaller steps near contact. To avoid the independent top-right check,
+append `--corner-layout tl_bl_br`.
 
 The touch recorder also starts a simple button UI at
 `http://192.168.1.73:8780/`. Use that page for jog, reference, pose, sample,

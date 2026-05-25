@@ -116,6 +116,8 @@ def test_touch_jog_commands_use_state_config(tmp_path: Path):
     assert "/left/go_to_pose" in recorder
     assert "--jog-strategy" in recorder
     assert "cartesian" in recorder
+    assert "--max-jog-step-m" in recorder
+    assert "0.1" in recorder
     assert "--joint-jog-topic" in recorder
     assert "/left/arm_forward_controller/commands" in recorder
     assert "--jog-web-port" in recorder

@@ -192,11 +192,11 @@ WEB_UI_HTML = """<!doctype html>
   <div class="inputs">
     <div>
       <label for="cartStep">Cartesian step, mm</label>
-      <input id="cartStep" type="number" min="0.1" max="50" step="0.5" value="2">
+      <input id="cartStep" type="number" min="0.1" max="100" step="0.5" value="2">
     </div>
     <div>
       <label for="jointStep">Joint step, deg</label>
-      <input id="jointStep" type="number" min="0.2" max="20" step="0.5" value="2">
+      <input id="jointStep" type="number" min="0.2" max="45" step="0.5" value="2">
     </div>
   </div>
 
@@ -1089,7 +1089,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-jog-step-m",
         type=float,
-        default=0.02,
+        default=0.10,
         help="Largest allowed per-command jog step in meters.",
     )
     parser.add_argument(

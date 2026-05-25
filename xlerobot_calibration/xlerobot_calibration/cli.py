@@ -48,6 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     touch_jog.add_argument("--corner-layout", choices=("tl_tr_bl_br", "tl_bl_br"), default="tl_tr_bl_br")
     touch_jog.add_argument("--samples", type=int, default=11)
     touch_jog.add_argument("--jog-step-m", type=float, default=0.002)
+    touch_jog.add_argument("--max-jog-step-m", type=float, default=0.10)
     touch_jog.add_argument("--jog-duration-sec", type=float, default=1.5)
     touch_jog.add_argument("--jog-strategy", choices=("cartesian", "joint_quintic"), default="cartesian")
     touch_jog.add_argument("--joint-step-rad", type=float, default=0.035)
@@ -138,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
                 corner_layout=args.corner_layout,
                 samples=args.samples,
                 jog_step_m=args.jog_step_m,
+                max_jog_step_m=args.max_jog_step_m,
                 jog_duration_sec=args.jog_duration_sec,
                 jog_strategy=args.jog_strategy,
                 joint_step_rad=args.joint_step_rad,

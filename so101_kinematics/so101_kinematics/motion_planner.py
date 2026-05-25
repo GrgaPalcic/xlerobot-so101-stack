@@ -60,6 +60,7 @@ class MotionPlanner:
         q_start: np.ndarray,
         T_goal: np.ndarray,
         n_steps: int | None = None,
+        duration: float | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Cartesian-interpolated trajectory using the solver's built-in segment generator.
 
@@ -67,6 +68,8 @@ class MotionPlanner:
         starting at t=0 with q_start.
         """
         q_start = np.asarray(q_start, dtype=float)
+        if n_steps is None and duration is not None:
+            n_steps = max(1, int(round(float(duration) / self.dt)))
         qs = self.solver.generate_segment(q_start, T_goal, n_steps=n_steps)
         # generate_segment returns steps 1..N, prepend start for t=0
         qs = np.vstack([q_start[np.newaxis], np.asarray(qs)])
