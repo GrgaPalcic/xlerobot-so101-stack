@@ -7,6 +7,7 @@ from typing import Any
 
 import yaml
 
+from .board_presets import BOARD_PRESETS, apply_board_preset, preset_names
 from .runner import StepError, doctor, run_step
 from .state import (
     apply_config_overrides,
@@ -50,6 +51,13 @@ def build_parser() -> argparse.ArgumentParser:
     set_config.add_argument("key")
     set_config.add_argument("value")
 
+    board_presets = sub.add_parser("board-presets", help="List available fiducial board presets")
+    add_common_options(board_presets)
+
+    use_board_preset = sub.add_parser("use-board-preset", help="Apply a fiducial board preset to run_state.yaml")
+    add_common_options(use_board_preset)
+    use_board_preset.add_argument("name", choices=preset_names())
+
     doctor_cmd = sub.add_parser("doctor", help="Check local tools and git signing config")
     add_common_options(doctor_cmd)
     export_report = sub.add_parser("export-report", help="Write a markdown field report draft")
@@ -73,6 +81,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(line)
             return 0
 
+        if args.command == "board-presets":
+            print_board_presets()
+            return 0
+
         if args.command == "wizard":
             state = resolve_or_create_state(args, workspace)
             apply_config_overrides(state, args.set)
@@ -86,6 +98,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "show-config":
             print(yaml.safe_dump(state.get("config", {}), sort_keys=True))
+            return 0
+        if args.command == "use-board-preset":
+            preset = apply_board_preset(state, args.name)
+            save_state(state)
+            print(f"applied {args.name}: {preset['title']}")
             return 0
         if args.command == "set-config":
             state.setdefault("config", {})[args.key] = args.value
@@ -134,6 +151,21 @@ def print_status(state: dict[str, Any]) -> None:
     print("")
     for step in STEPS:
         print(f"{step_status(state, step.id):10} {step.id:28} {step.title}")
+
+
+def print_board_presets() -> None:
+    for name in preset_names():
+        preset = BOARD_PRESETS[name]
+        print(f"{name}")
+        print(f"  role: {preset['role']}")
+        print(f"  title: {preset['title']}")
+        print(f"  asset: {preset['asset']}")
+        print(f"  config:")
+        for key, value in preset["config"].items():
+            print(f"    {key}: {value}")
+        if preset.get("notes"):
+            print(f"  notes: {preset['notes']}")
+        print("")
 
 
 def next_pending_step(state: dict[str, Any]) -> str | None:

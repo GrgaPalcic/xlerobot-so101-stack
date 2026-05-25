@@ -27,7 +27,7 @@ The current working branch is:
 
 ```bash
 git branch --show-current
-# xlerobot/two-arm-calibration-runbook
+# xlerobot/calibration-cli
 ```
 
 The prior dirty field integration was archived before this branch:
@@ -153,12 +153,16 @@ workspace/world target:
 The print-ready version used by this runbook is:
 
 ```text
+docs/assets/fiducials/calib.io_charuco_420x297_8x11_34_25_DICT_5X5.pdf
 docs/assets/fiducials/xlerobot_world_targets_7x5_20mm_aruco5x5_100_ids49-99_a4.pdf
+docs/assets/fiducials/charuco_board_presets.yaml
 ```
 
-The PDF contains three independent plates. Use Plate A by default. If print
-quality, mounting, glare, or detection is poor, use Plate B or Plate C and
-change only `WORLD_START_ID` to match the plate label.
+The world-target PDF contains three independent plates. Use Plate A by default.
+If print quality, mounting, glare, or detection is poor, use Plate B or Plate C
+and change only `WORLD_START_ID` to match the plate label. The smaller plates
+are 140 mm x 100 mm patterns printed inside an A4 PDF; the physical target can
+be cut and mounted on an A5-sized or smaller rigid backing.
 
 If the GoPro sees too few markers on the 7 x 5 target, print a 9 x 7 version
 with the same square and marker sizes. That gives 32 markers and a 0.180 m x
@@ -203,7 +207,7 @@ On the Dell robot host:
 ```bash
 ssh dell@192.168.1.73
 
-export WS=/home/dell/Documents/so101-ros-physical-ai
+export WS=/home/dell/Documents/xlerobot-so101-stack
 export RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
 export OUT=$WS/field_runs/xlerobot_$RUN_ID
 
@@ -212,6 +216,10 @@ mkdir -p "$OUT"/{logs,config,images,intrinsics,extrinsics,touch,audit,snapshots,
 cd "$WS"
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
+
+calib() {
+  xlerobot-calib --workspace "$WS" --out "$OUT" "$@"
+}
 ```
 
 Record the exact branch and commit:
@@ -528,6 +536,8 @@ touching the arms. If they remain stiff, use the torque-off procedure from
 Use the large intrinsics board first. For the previous A3 board:
 
 ```bash
+calib use-board-preset intrinsics_a3_11x8_34_25_id2
+
 export INTR_COLS=11
 export INTR_ROWS=8
 export INTR_SQUARE_M=0.034
@@ -677,6 +687,8 @@ Adjust those paths if the summaries show a better model.
 Set these to match the smaller fixed target:
 
 ```bash
+calib use-board-preset world_plate_a_7x5_20_14_id49
+
 export WORLD_COLS=7
 export WORLD_ROWS=5
 export WORLD_SQUARE_M=0.020
@@ -1328,7 +1340,7 @@ export METRIC_MODEL=/home/grga/Documents/Depth-Anything-3/models/DA3-LARGE-1.1
 export GRASP_BACKEND=ggcnn
 export DA3_CONDITIONING=required
 export DA3_FALLBACK_INDEPENDENT=false
-export SUPPORT_PLANE_YAML=/home/dell/Documents/so101-ros-physical-ai/field_runs/xlerobot_<RUN_ID>/extrinsics/world_support_plane.yaml
+export SUPPORT_PLANE_YAML=/home/dell/Documents/xlerobot-so101-stack/field_runs/xlerobot_<RUN_ID>/extrinsics/world_support_plane.yaml
 export WORKSPACE_BOUNDS="-0.50 0.50 -0.35 0.35 -0.05 0.50"
 
 scripts/run_grasp_server.sh

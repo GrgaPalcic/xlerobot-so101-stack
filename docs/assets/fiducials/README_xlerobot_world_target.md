@@ -1,6 +1,30 @@
-# XLeRobot World Fiducial Targets
+# XLeRobot Fiducial Targets
 
-These are small rigid workspace ChArUco targets for the dual-arm calibration run.
+These are the physical ChArUco/ArUco targets for the dual-arm calibration run.
+The machine-readable presets are in `charuco_board_presets.yaml`, and the same
+names are available in `xlerobot-calib board-presets`.
+
+## Intrinsics Board
+
+Use the large caib.io board for camera intrinsics:
+
+- preset: `intrinsics_a3_11x8_34_25_id2`
+- file: `calib.io_charuco_420x297_8x11_34_25_DICT_5X5.pdf`
+- page: A3 landscape, 420 mm x 297 mm
+- dictionary: DICT_5X5_100
+- squares: 11 x 8
+- square size: 34 mm
+- marker size: 25 mm
+- marker ids: 2-45
+- outer pattern size: 374.0 mm x 272.0 mm
+
+Use this board for intrinsics because it covers more of the camera image and
+gives better lens distortion observability than a small target.
+
+## Workspace/World Plates
+
+These are small rigid workspace ChArUco targets for base/world and camera
+extrinsic calibration.
 
 - dictionary: DICT_5X5_100
 - plates: Plate A, Plate B, Plate C
@@ -25,6 +49,10 @@ Print file:
 xlerobot_world_targets_7x5_20mm_aruco5x5_100_ids49-99_a4.pdf
 ```
 
+This is an A4 PDF containing three smaller plates. The important dimensions are
+the printed square and marker sizes, not the paper size. Mount the selected
+plate to a rigid flat backing before calibration.
+
 Use these runbook constants for Plate A:
 
 ```bash
@@ -43,4 +71,20 @@ Alternative start IDs:
 Plate A: WORLD_START_ID=49
 Plate B: WORLD_START_ID=66
 Plate C: WORLD_START_ID=83
+```
+
+## CLI Presets
+
+```bash
+xlerobot-calib --workspace "$XLEROBOT_WS" --out "$XLEROBOT_RUN" board-presets
+xlerobot-calib --workspace "$XLEROBOT_WS" --out "$XLEROBOT_RUN" use-board-preset intrinsics_a3_11x8_34_25_id2
+xlerobot-calib --workspace "$XLEROBOT_WS" --out "$XLEROBOT_RUN" use-board-preset world_plate_a_7x5_20_14_id49
+```
+
+Switch to Plate B or C only if Plate A has bad print quality, glare, mounting,
+or detection:
+
+```bash
+xlerobot-calib --workspace "$XLEROBOT_WS" --out "$XLEROBOT_RUN" use-board-preset world_plate_b_7x5_20_14_id66
+xlerobot-calib --workspace "$XLEROBOT_WS" --out "$XLEROBOT_RUN" use-board-preset world_plate_c_7x5_20_14_id83
 ```

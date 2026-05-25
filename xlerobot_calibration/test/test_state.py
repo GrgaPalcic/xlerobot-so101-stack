@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from xlerobot_calibration.board_presets import apply_board_preset, preset_names
 from xlerobot_calibration.report import write_report
 from xlerobot_calibration.runner import generate_controller_configs, generate_world_files, is_missing_config_value
 from xlerobot_calibration.state import create_state, load_state, mark_step
@@ -50,3 +51,18 @@ def test_placeholder_config_values_are_missing():
     assert is_missing_config_value("/dev/ttyUSB_LEFT_CONFIRMED")
     assert is_missing_config_value("/path/to/xlerobot_left.json")
     assert not is_missing_config_value("/dev/ttyUSB0")
+
+
+def test_board_presets_update_intrinsics_and_world_config(tmp_path: Path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    state = create_state(workspace, run_id="20260517T000000Z")
+
+    assert "intrinsics_a3_11x8_34_25_id2" in preset_names()
+    apply_board_preset(state, "intrinsics_a3_11x8_34_25_id2")
+    apply_board_preset(state, "world_plate_c_7x5_20_14_id83")
+
+    assert state["config"]["intr_start_id"] == 2
+    assert state["config"]["intr_square_m"] == 0.034
+    assert state["config"]["world_start_id"] == 83
+    assert state["config"]["world_marker_m"] == 0.014

@@ -70,6 +70,9 @@ checkout therefore makes it appear to start from scratch.
 calib doctor
 calib status
 calib show-config
+calib board-presets
+calib use-board-preset intrinsics_a3_11x8_34_25_id2
+calib use-board-preset world_plate_a_7x5_20_14_id49
 calib set-config left_port /dev/serial/by-path/LEFT_ADAPTER_CONFIRMED
 calib set-config right_port /dev/serial/by-path/RIGHT_ADAPTER_CONFIRMED
 calib run-step device_inventory
@@ -131,6 +134,21 @@ center_gopro_info
 
 Generated values such as `left_joint_config`, `right_joint_config`, and the
 per-run camera config paths are written back into `run_state.yaml`.
+
+## Fiducial Board Presets
+
+The printed board assets are tracked under `docs/assets/fiducials/`, with the
+same names exposed by the CLI:
+
+```bash
+calib board-presets
+calib use-board-preset intrinsics_a3_11x8_34_25_id2
+calib use-board-preset world_plate_a_7x5_20_14_id49
+```
+
+Use the large A3 caib.io board for intrinsics. Use one of the smaller rigid
+workspace plates for world/base solves and camera extrinsics. Plate A is the
+default; Plate B and Plate C only change `world_start_id`.
 
 ## Extraction Plan
 

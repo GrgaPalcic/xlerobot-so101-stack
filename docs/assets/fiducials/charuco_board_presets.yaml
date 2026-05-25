@@ -1,0 +1,104 @@
+# Named ChArUco/ArUco board presets used by the XLeRobot calibration runbook
+# and xlerobot-calib CLI.
+#
+# The "cols" and "rows" values are checkerboard squares, not marker counts.
+# Sizes are physical printed dimensions in meters.
+default_intrinsics_preset: intrinsics_a3_11x8_34_25_id2
+default_world_preset: world_plate_a_7x5_20_14_id49
+
+presets:
+  intrinsics_a3_11x8_34_25_id2:
+    role: intrinsics
+    description: Large caib.io board used for camera intrinsics.
+    asset: calib.io_charuco_420x297_8x11_34_25_DICT_5X5.pdf
+    generator: calib.io
+    page_size: A3 landscape, 420 mm x 297 mm
+    dictionary: DICT_5X5_100
+    cols: 11
+    rows: 8
+    square_m: 0.034
+    marker_m: 0.025
+    start_id: 2
+    marker_count: 44
+    pattern_width_m: 0.374
+    pattern_height_m: 0.272
+    cli_config:
+      intr_cols: 11
+      intr_rows: 8
+      intr_square_m: 0.034
+      intr_marker_m: 0.025
+      intr_start_id: 2
+      intr_marker_count: 44
+      intr_dict: DICT_5X5_100
+
+  world_plate_a_7x5_20_14_id49:
+    role: world
+    description: Default smaller rigid workspace/world target, Plate A.
+    asset: xlerobot_world_targets_7x5_20mm_aruco5x5_100_ids49-99_a4.pdf
+    page: 1
+    plate: A
+    dictionary: DICT_5X5_100
+    cols: 7
+    rows: 5
+    square_m: 0.020
+    marker_m: 0.014
+    start_id: 49
+    marker_count: 17
+    pattern_width_m: 0.140
+    pattern_height_m: 0.100
+    cli_config:
+      world_cols: 7
+      world_rows: 5
+      world_square_m: 0.020
+      world_marker_m: 0.014
+      world_start_id: 49
+      world_marker_count: 17
+      world_dict: DICT_5X5_100
+
+  world_plate_b_7x5_20_14_id66:
+    role: world
+    description: Alternative smaller rigid workspace/world target, Plate B.
+    asset: xlerobot_world_targets_7x5_20mm_aruco5x5_100_ids49-99_a4.pdf
+    page: 1
+    plate: B
+    dictionary: DICT_5X5_100
+    cols: 7
+    rows: 5
+    square_m: 0.020
+    marker_m: 0.014
+    start_id: 66
+    marker_count: 17
+    pattern_width_m: 0.140
+    pattern_height_m: 0.100
+    cli_config:
+      world_cols: 7
+      world_rows: 5
+      world_square_m: 0.020
+      world_marker_m: 0.014
+      world_start_id: 66
+      world_marker_count: 17
+      world_dict: DICT_5X5_100
+
+  world_plate_c_7x5_20_14_id83:
+    role: world
+    description: Alternative smaller rigid workspace/world target, Plate C.
+    asset: xlerobot_world_targets_7x5_20mm_aruco5x5_100_ids49-99_a4.pdf
+    page: 2
+    plate: C
+    dictionary: DICT_5X5_100
+    cols: 7
+    rows: 5
+    square_m: 0.020
+    marker_m: 0.014
+    start_id: 83
+    marker_count: 17
+    pattern_width_m: 0.140
+    pattern_height_m: 0.100
+    cli_config:
+      world_cols: 7
+      world_rows: 5
+      world_square_m: 0.020
+      world_marker_m: 0.014
+      world_start_id: 83
+      world_marker_count: 17
+      world_dict: DICT_5X5_100
