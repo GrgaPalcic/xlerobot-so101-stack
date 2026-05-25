@@ -118,6 +118,8 @@ def test_touch_jog_commands_use_state_config(tmp_path: Path):
     assert "cartesian" in recorder
     assert "--joint-jog-topic" in recorder
     assert "/left/arm_forward_controller/commands" in recorder
+    assert "--jog-web-port" in recorder
+    assert "8780" in recorder
     assert str(Path(state["out_dir"]) / "touch/left_base_to_world_board.yaml") in recorder
 
 

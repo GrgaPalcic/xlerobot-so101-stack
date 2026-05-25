@@ -139,6 +139,7 @@ def build_touch_jog_commands(
     jog_duration_sec: float = 1.5,
     jog_strategy: str = "cartesian",
     joint_step_rad: float = 0.035,
+    web_port: int = 8780,
 ) -> tuple[list[str], list[str], list[str]]:
     if side not in {"left", "right"}:
         raise StepError(f"side must be left or right, got {side!r}")
@@ -229,6 +230,8 @@ def build_touch_jog_commands(
         "--output",
         str(touch_output),
     ]
+    if web_port > 0:
+        recorder_cmd.extend(["--jog-web-port", str(web_port)])
     return bringup_cmd, motion_cmd, recorder_cmd
 
 
@@ -243,6 +246,7 @@ def run_touch_jog(
     jog_duration_sec: float = 1.5,
     jog_strategy: str = "cartesian",
     joint_step_rad: float = 0.035,
+    web_port: int = 8780,
     stop_existing: bool = True,
     dry_run: bool = False,
     yes: bool = False,
@@ -264,6 +268,7 @@ def run_touch_jog(
         jog_duration_sec=jog_duration_sec,
         jog_strategy=jog_strategy,
         joint_step_rad=joint_step_rad,
+        web_port=web_port,
     )
 
     print("")

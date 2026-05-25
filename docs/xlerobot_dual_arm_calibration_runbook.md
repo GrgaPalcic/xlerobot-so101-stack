@@ -658,6 +658,11 @@ the latest `field_runs/*/run_state.yaml`. To use a finer first step, append
 `--jog-step-m 0.001`. To avoid the independent top-right check, append
 `--corner-layout tl_bl_br`.
 
+The touch recorder also starts a simple button UI at
+`http://192.168.1.73:8780/`. Use that page for jog, reference, pose, sample,
+and quit controls instead of typing commands. If the port is already occupied,
+run the wrapper with `--web-port 8781`.
+
 Jog prompt commands include Cartesian `x+`, `x-`, `y+`, `y-`, `z+`, and `z-`
 in the arm base frame. They also include direct joint nudges: `pan+/-`,
 `lift+/-`, `elbow+/-`, `wrist+/-`, and `roll+/-`. Use the joint nudges when

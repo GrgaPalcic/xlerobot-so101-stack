@@ -51,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     touch_jog.add_argument("--jog-duration-sec", type=float, default=1.5)
     touch_jog.add_argument("--jog-strategy", choices=("cartesian", "joint_quintic"), default="cartesian")
     touch_jog.add_argument("--joint-step-rad", type=float, default=0.035)
+    touch_jog.add_argument("--web-port", type=int, default=8780, help="Browser UI port. Use 0 to disable.")
     touch_jog.add_argument("--no-stop-existing", action="store_true", help="Do not stop existing same-side ROS control processes")
     touch_jog.add_argument("--dry-run", action="store_true")
     touch_jog.add_argument("--yes", action="store_true", help="Assume yes for hardware prompt")
@@ -140,6 +141,7 @@ def main(argv: list[str] | None = None) -> int:
                 jog_duration_sec=args.jog_duration_sec,
                 jog_strategy=args.jog_strategy,
                 joint_step_rad=args.joint_step_rad,
+                web_port=args.web_port,
                 stop_existing=not args.no_stop_existing,
                 dry_run=args.dry_run,
                 yes=args.yes,

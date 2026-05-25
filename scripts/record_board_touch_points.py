@@ -5,13 +5,18 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import json
 import math
 import os
+import queue
+import select
 import sys
 import threading
 import time
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import urlparse
 
 import numpy as np
 import rclpy
@@ -114,6 +119,151 @@ class JogCommand:
     joint_name: str | None = None
     joint_sign: float | None = None
     value: float | None = None
+
+
+WEB_UI_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SO101 Touch Jog</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #111418;
+      color: #eef2f7;
+    }
+    body { margin: 0; padding: 18px; }
+    main { max-width: 860px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    h2 { font-size: 16px; margin: 18px 0 8px; }
+    .status { padding: 12px; border: 1px solid #303844; background: #171c22; border-radius: 8px; }
+    .target { font-size: 18px; font-weight: 650; }
+    .muted { color: #a9b4c2; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(82px, 1fr)); gap: 8px; }
+    .joint-grid { display: grid; grid-template-columns: repeat(2, minmax(120px, 1fr)); gap: 8px; }
+    button {
+      min-height: 48px;
+      border: 1px solid #394455;
+      border-radius: 8px;
+      background: #222a34;
+      color: #eef2f7;
+      font-size: 17px;
+      font-weight: 620;
+    }
+    button:active { transform: translateY(1px); background: #2f3a49; }
+    button.primary { background: #1f6feb; border-color: #2d7cf0; }
+    button.warn { background: #7a2323; border-color: #a13a3a; }
+    label { display: block; color: #a9b4c2; font-size: 13px; margin-bottom: 4px; }
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 42px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #394455;
+      background: #151a20;
+      color: #eef2f7;
+      font-size: 16px;
+    }
+    .inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+    pre {
+      white-space: pre-wrap;
+      min-height: 96px;
+      border: 1px solid #303844;
+      background: #0d1117;
+      border-radius: 8px;
+      padding: 10px;
+      color: #d7dee8;
+    }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>SO101 Touch Jog</h1>
+  <section class="status">
+    <div class="target" id="target">Waiting for recorder...</div>
+    <div class="muted" id="instruction"></div>
+    <pre id="status"></pre>
+  </section>
+
+  <div class="inputs">
+    <div>
+      <label for="cartStep">Cartesian step, mm</label>
+      <input id="cartStep" type="number" min="0.1" max="50" step="0.5" value="2">
+    </div>
+    <div>
+      <label for="jointStep">Joint step, deg</label>
+      <input id="jointStep" type="number" min="0.2" max="20" step="0.5" value="2">
+    </div>
+  </div>
+
+  <h2>Cartesian</h2>
+  <div class="grid">
+    <button onclick="sendAxis('x-')">X-</button>
+    <button onclick="sendAxis('z+')">Z+</button>
+    <button onclick="sendAxis('x+')">X+</button>
+    <button onclick="sendAxis('y-')">Y-</button>
+    <button onclick="sendAxis('z-')">Z-</button>
+    <button onclick="sendAxis('y+')">Y+</button>
+  </div>
+
+  <h2>Joints</h2>
+  <div class="joint-grid">
+    <button onclick="sendJoint('pan-')">Pan -</button>
+    <button onclick="sendJoint('pan+')">Pan +</button>
+    <button onclick="sendJoint('lift-')">Lift -</button>
+    <button onclick="sendJoint('lift+')">Lift +</button>
+    <button onclick="sendJoint('elbow-')">Elbow -</button>
+    <button onclick="sendJoint('elbow+')">Elbow +</button>
+    <button onclick="sendJoint('wrist-')">Wrist -</button>
+    <button onclick="sendJoint('wrist+')">Wrist +</button>
+    <button onclick="sendJoint('roll-')">Roll -</button>
+    <button onclick="sendJoint('roll+')">Roll +</button>
+  </div>
+
+  <h2>Record</h2>
+  <div class="row">
+    <button onclick="send('ref')">Ref</button>
+    <button onclick="send('pose')">Pose</button>
+    <button class="primary" onclick="send('sample')">Sample Corner</button>
+    <button class="warn" onclick="send('q')">Quit</button>
+  </div>
+</main>
+<script>
+async function send(command) {
+  await fetch('/api/command', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({command})
+  });
+  await refresh();
+}
+function sendAxis(axis) {
+  const mm = Number(document.getElementById('cartStep').value || 2);
+  send(`${axis} ${mm / 1000}`);
+}
+function sendJoint(joint) {
+  const deg = Number(document.getElementById('jointStep').value || 2);
+  send(`${joint} ${deg * Math.PI / 180}`);
+}
+async function refresh() {
+  const res = await fetch('/api/state');
+  const data = await res.json();
+  document.getElementById('target').textContent = data.target || 'Waiting for recorder...';
+  document.getElementById('instruction').textContent = data.instruction || '';
+  document.getElementById('status').textContent = data.status || '';
+  if (data.cart_step_m) document.getElementById('cartStep').value = (data.cart_step_m * 1000).toFixed(1);
+  if (data.joint_step_rad) document.getElementById('jointStep').value = (data.joint_step_rad * 180 / Math.PI).toFixed(1);
+}
+setInterval(refresh, 750);
+refresh();
+</script>
+</body>
+</html>
+"""
 
 
 def parse_xyz(text: str) -> np.ndarray:
@@ -360,6 +510,120 @@ def format_jog_help(step_m: float, duration_s: float, joint_step_rad: float | No
     )
 
 
+class WebJogInterface:
+    def __init__(self, host: str, port: int) -> None:
+        self.host = host
+        self.port = port
+        self.command_queue: queue.Queue[str] = queue.Queue()
+        self._lock = threading.Lock()
+        self._state: dict[str, Any] = {
+            "target": "",
+            "instruction": "",
+            "status": "Waiting for recorder...",
+            "cart_step_m": 0.002,
+            "joint_step_rad": 0.035,
+        }
+        self._server: ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        interface = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, format: str, *args: Any) -> None:
+                return
+
+            def do_GET(self) -> None:
+                parsed = urlparse(self.path)
+                if parsed.path == "/":
+                    body = WEB_UI_HTML.encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/html; charset=utf-8")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                if parsed.path == "/api/state":
+                    interface._send_json(self, interface.state())
+                    return
+                self.send_error(404)
+
+            def do_POST(self) -> None:
+                parsed = urlparse(self.path)
+                if parsed.path != "/api/command":
+                    self.send_error(404)
+                    return
+                length = int(self.headers.get("Content-Length", "0"))
+                try:
+                    payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                    command = str(payload.get("command", "")).strip()
+                except Exception:
+                    self.send_error(400)
+                    return
+                if command:
+                    interface.command_queue.put(command)
+                    interface.set_status(f"Queued: {command}")
+                interface._send_json(self, {"ok": True})
+
+        self._server = ThreadingHTTPServer((self.host, self.port), Handler)
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+        actual_port = int(self._server.server_address[1])
+        print(f"Web jog UI: http://127.0.0.1:{actual_port}/")
+        if self.host in ("", "0.0.0.0"):
+            print(f"Web jog UI from another machine: http://192.168.1.73:{actual_port}/")
+
+    def stop(self) -> None:
+        if self._server is not None:
+            self._server.shutdown()
+            self._server.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+
+    def state(self) -> dict[str, Any]:
+        with self._lock:
+            return dict(self._state)
+
+    def set_prompt(
+        self,
+        *,
+        target: str,
+        instruction: str,
+        status: str,
+        cart_step_m: float,
+        joint_step_rad: float | None,
+    ) -> None:
+        with self._lock:
+            self._state.update(
+                {
+                    "target": target,
+                    "instruction": instruction,
+                    "status": status,
+                    "cart_step_m": cart_step_m,
+                    "joint_step_rad": joint_step_rad,
+                }
+            )
+
+    def set_status(self, status: str) -> None:
+        with self._lock:
+            self._state["status"] = status
+
+    def get_command_nowait(self) -> str | None:
+        try:
+            return self.command_queue.get_nowait()
+        except queue.Empty:
+            return None
+
+    @staticmethod
+    def _send_json(handler: BaseHTTPRequestHandler, data: dict[str, Any]) -> None:
+        body = json.dumps(data).encode("utf-8")
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/json")
+        handler.send_header("Content-Length", str(len(body)))
+        handler.end_headers()
+        handler.wfile.write(body)
+
+
 class JointJogSession:
     def __init__(
         self,
@@ -446,6 +710,7 @@ class JogSession:
         timeout_s: float,
         strategy: str,
         joint_jog: JointJogSession | None = None,
+        web: WebJogInterface | None = None,
     ) -> None:
         self.node = node
         self.tf_buffer = tf_buffer
@@ -458,6 +723,7 @@ class JogSession:
         self.timeout_s = timeout_s
         self.strategy = strategy
         self.joint_jog = joint_jog
+        self.web = web
         self.client = node.create_client(GoToPose, service_name)
         if not self.client.wait_for_service(timeout_sec=timeout_s):
             raise RuntimeError(f"jog service {service_name} is not available")
@@ -472,50 +738,75 @@ class JogSession:
         height_m: float,
     ) -> None:
         print(f"[{name}] {instruction}")
-        self.print_reference(name, accepted_points, width_m, height_m)
+        reference = self.reference_text(name, accepted_points, width_m, height_m)
+        if reference:
+            print(reference)
+        self._set_web_prompt(name, instruction, reference or "Ready")
         print(format_jog_help(self.step_m, self.duration_s, self._joint_step_rad()))
         while True:
-            raw = input(f"{name} jog> ")
+            raw = self._read_command(f"{name} jog> ")
             try:
                 command = parse_jog_command(raw)
                 if command.kind == "sample":
+                    if self.web is not None:
+                        self.web.set_status("Sampling corner...")
                     return
                 if command.kind == "quit":
                     raise KeyboardInterrupt
                 if command.kind == "help":
-                    print(format_jog_help(self.step_m, self.duration_s, self._joint_step_rad()))
+                    text = format_jog_help(self.step_m, self.duration_s, self._joint_step_rad())
+                    print(text)
+                    self._set_web_prompt(name, instruction, text)
                 elif command.kind == "pose":
                     self.print_pose()
-                    self.print_reference(name, accepted_points, width_m, height_m)
+                    reference = self.reference_text(name, accepted_points, width_m, height_m)
+                    if reference:
+                        print(reference)
+                    self._set_web_prompt(name, instruction, reference or "Pose printed in terminal.")
                 elif command.kind == "reference":
-                    self.print_reference(name, accepted_points, width_m, height_m)
+                    reference = self.reference_text(name, accepted_points, width_m, height_m)
+                    if reference:
+                        print(reference)
+                    self._set_web_prompt(name, instruction, reference or "No accepted corners yet.")
                 elif command.kind == "step":
                     assert command.value is not None
                     if command.value > self.max_step_m:
-                        print(
+                        text = (
                             f"  rejected: max jog step is "
                             f"{self.max_step_m * 1000.0:.1f} mm"
                         )
+                        print(text)
+                        self._set_web_prompt(name, instruction, text)
                     else:
                         self.step_m = command.value
-                        print(f"  step set to {self.step_m * 1000.0:.1f} mm")
+                        text = f"  step set to {self.step_m * 1000.0:.1f} mm"
+                        print(text)
+                        self._set_web_prompt(name, instruction, text)
                 elif command.kind == "duration":
                     assert command.value is not None
                     self.duration_s = command.value
-                    print(f"  duration set to {self.duration_s:.2f} s")
+                    text = f"  duration set to {self.duration_s:.2f} s"
+                    print(text)
+                    self._set_web_prompt(name, instruction, text)
                 elif command.kind == "joint_step":
                     if self.joint_jog is None:
-                        print("  joint jog is not enabled")
+                        text = "  joint jog is not enabled"
+                        print(text)
+                        self._set_web_prompt(name, instruction, text)
                     else:
                         assert command.value is not None
                         self.joint_jog.joint_step_rad = command.value
-                        print(
+                        text = (
                             f"  joint step set to "
                             f"{math.degrees(self.joint_jog.joint_step_rad):.1f} deg"
                         )
+                        print(text)
+                        self._set_web_prompt(name, instruction, text)
                 elif command.kind == "joint_move":
                     if self.joint_jog is None:
-                        print("  joint jog is not enabled")
+                        text = "  joint jog is not enabled"
+                        print(text)
+                        self._set_web_prompt(name, instruction, text)
                     else:
                         assert command.joint_name is not None
                         assert command.joint_sign is not None
@@ -524,14 +815,42 @@ class JogSession:
                             command.joint_sign,
                             step_rad=command.value,
                         )
+                        reference = self.reference_text(name, accepted_points, width_m, height_m)
+                        self._set_web_prompt(name, instruction, reference or f"Moved {command.joint_name}.")
                 elif command.kind == "move":
                     assert command.delta_axis is not None
                     step_m = self.step_m if command.value is None else command.value
                     self.move(command.delta_axis * step_m)
+                    reference = self.reference_text(name, accepted_points, width_m, height_m)
+                    self._set_web_prompt(name, instruction, reference or "Moved.")
             except KeyboardInterrupt:
                 raise
             except Exception as exc:
                 print(f"  {exc}")
+                self._set_web_prompt(name, instruction, f"ERROR: {exc}")
+
+    def _read_command(self, prompt: str) -> str:
+        if self.web is None:
+            return input(prompt)
+        print(prompt, end="", flush=True)
+        while True:
+            command = self.web.get_command_nowait()
+            if command is not None:
+                print(command)
+                return command
+            readable, _, _ = select.select([sys.stdin], [], [], 0.1)
+            if readable:
+                return sys.stdin.readline().strip()
+
+    def _set_web_prompt(self, target: str, instruction: str, status: str) -> None:
+        if self.web is not None:
+            self.web.set_prompt(
+                target=target,
+                instruction=instruction,
+                status=status,
+                cart_step_m=self.step_m,
+                joint_step_rad=self._joint_step_rad(),
+            )
 
     def _joint_step_rad(self) -> float | None:
         if self.joint_jog is None:
@@ -554,15 +873,15 @@ class JogSession:
         )
         print(f"  tool quaternion xyzw:   {[round(v, 6) for v in quat]}")
 
-    def print_reference(
+    def reference_text(
         self,
         target_name: str,
         accepted_points: dict[str, np.ndarray],
         width_m: float,
         height_m: float,
-    ) -> None:
+    ) -> str:
         if not accepted_points:
-            return
+            return ""
         current = wait_for_tool_point(
             self.tf_buffer,
             self.base_frame,
@@ -585,9 +904,8 @@ class JogSession:
                 f"delta {(observed_m - expected_m) * 1000.0:+.1f})"
             )
         if lines:
-            print("Reference distances:")
-            for line in lines:
-                print(line)
+            return "Reference distances:\n" + "\n".join(lines)
+        return ""
 
     def move(self, delta_xyz: np.ndarray) -> None:
         T = wait_for_tool_pose(
@@ -808,6 +1126,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=0.035,
         help="Default direct joint jog step in radians.",
     )
+    parser.add_argument(
+        "--jog-web-port",
+        type=int,
+        default=0,
+        help="Optional browser button UI port for jog commands. 0 disables it.",
+    )
+    parser.add_argument(
+        "--jog-web-host",
+        default="0.0.0.0",
+        help="Host/interface for --jog-web-port.",
+    )
     return parser
 
 
@@ -855,6 +1184,11 @@ def main() -> int:
             timeout_s=args.jog_timeout_s,
         )
 
+    web: WebJogInterface | None = None
+    if args.jog_web_port:
+        web = WebJogInterface(args.jog_web_host, args.jog_web_port)
+        web.start()
+
     jog_session: JogSession | None = None
     if args.jog_service:
         jog_session = JogSession(
@@ -870,6 +1204,7 @@ def main() -> int:
             timeout_s=args.jog_timeout_s,
             strategy=args.jog_strategy,
             joint_jog=joint_jog,
+            web=web,
         )
 
     print("")
@@ -885,6 +1220,8 @@ def main() -> int:
     else:
         print("JOG MODE ENABLED: this terminal sends real arm motion through GoToPose.")
         print("Use one small jog command at a time, then press Enter/sample to record.")
+        if web is not None:
+            print("The web UI can send the same jog/sample commands.")
     print("")
 
     points: dict[str, np.ndarray] = {}
@@ -1015,6 +1352,8 @@ def main() -> int:
         print(f"\nERROR: {exc}", file=sys.stderr)
         return 1
     finally:
+        if web is not None:
+            web.stop()
         executor.shutdown()
         spin_thread.join(timeout=1.0)
         node.destroy_node()
