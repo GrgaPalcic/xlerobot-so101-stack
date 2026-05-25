@@ -194,6 +194,19 @@ STEPS: tuple[Step, ...] = (
         description="Run the left wrist caib.io capture and intrinsic solve commands from the runbook.",
         kind="manual",
         required_config=("left_wrist_dev",),
+        commands=(
+            "python3 {workspace}/scripts/capture_caib_marker_board_v4l2.py "
+            "--device {left_wrist_dev} --width 1280 --height 800 --fps 30 --fourcc MJPG "
+            "--camera-name left_wrist_arducam --output-dir {out}/intrinsics/left_wrist_capture "
+            "--aruco-dict {intr_dict} --start-id {intr_start_id} --marker-count {intr_marker_count} "
+            "--target-samples 55 --min-markers 8\n"
+            "\n"
+            "python3 {workspace}/scripts/calibrate_caib_marker_board_from_frames.py "
+            "--frames-dir {out}/intrinsics/left_wrist_capture/frames --output-dir {out}/intrinsics "
+            "--camera-name left_wrist_arducam --cols {intr_cols} --rows {intr_rows} "
+            "--square-m {intr_square_m} --marker-m {intr_marker_m} --start-id {intr_start_id} "
+            "--marker-count {intr_marker_count} --aruco-dict {intr_dict} --min-markers 8 --min-frames 20",
+        ),
     ),
     Step(
         id="intrinsics_right",
@@ -201,6 +214,19 @@ STEPS: tuple[Step, ...] = (
         description="Run the right wrist caib.io capture and intrinsic solve commands from the runbook.",
         kind="manual",
         required_config=("right_wrist_dev",),
+        commands=(
+            "python3 {workspace}/scripts/capture_caib_marker_board_v4l2.py "
+            "--device {right_wrist_dev} --width 1280 --height 800 --fps 30 --fourcc MJPG "
+            "--camera-name right_wrist_arducam --output-dir {out}/intrinsics/right_wrist_capture "
+            "--aruco-dict {intr_dict} --start-id {intr_start_id} --marker-count {intr_marker_count} "
+            "--target-samples 55 --min-markers 8\n"
+            "\n"
+            "python3 {workspace}/scripts/calibrate_caib_marker_board_from_frames.py "
+            "--frames-dir {out}/intrinsics/right_wrist_capture/frames --output-dir {out}/intrinsics "
+            "--camera-name right_wrist_arducam --cols {intr_cols} --rows {intr_rows} "
+            "--square-m {intr_square_m} --marker-m {intr_marker_m} --start-id {intr_start_id} "
+            "--marker-count {intr_marker_count} --aruco-dict {intr_dict} --min-markers 8 --min-frames 20",
+        ),
     ),
     Step(
         id="intrinsics_gopro",
@@ -208,6 +234,27 @@ STEPS: tuple[Step, ...] = (
         description="Run the GoPro caib.io capture and intrinsic solve commands from the runbook.",
         kind="manual",
         required_config=("center_gopro_dev",),
+        commands=(
+            "python3 {workspace}/scripts/capture_caib_marker_board_v4l2.py "
+            "--device {center_gopro_dev} --width 1280 --height 720 --fps 30 --fourcc YUYV "
+            "--camera-name center_gopro_superview --output-dir {out}/intrinsics/center_gopro_capture "
+            "--aruco-dict {intr_dict} --start-id {intr_start_id} --marker-count {intr_marker_count} "
+            "--target-samples 70 --min-markers 8\n"
+            "\n"
+            "# If OpenCV blocks on /dev/video42, collect frames with ffmpeg instead:\n"
+            "mkdir -p {out}/intrinsics/center_gopro_capture/frames\n"
+            "for i in $(seq -w 1 70); do\n"
+            "  read -r -p \"Place board pose $i, hold still, press Enter...\"\n"
+            "  ffmpeg -y -f v4l2 -input_format yuyv422 -video_size 1280x720 "
+            "-i {center_gopro_dev} -frames:v 1 {out}/intrinsics/center_gopro_capture/frames/capture_${{i}}.jpg\n"
+            "done\n"
+            "\n"
+            "python3 {workspace}/scripts/calibrate_caib_marker_board_from_frames.py "
+            "--frames-dir {out}/intrinsics/center_gopro_capture/frames --output-dir {out}/intrinsics "
+            "--camera-name center_gopro_superview --cols {intr_cols} --rows {intr_rows} "
+            "--square-m {intr_square_m} --marker-m {intr_marker_m} --start-id {intr_start_id} "
+            "--marker-count {intr_marker_count} --aruco-dict {intr_dict} --min-markers 8 --min-frames 25",
+        ),
     ),
     Step(
         id="generate_world_files",
@@ -260,7 +307,59 @@ STEPS: tuple[Step, ...] = (
         description="Run solve_camera_extrinsics_from_board.py for center GoPro and wrist mount poses.",
         kind="manual",
         prerequisites=("invert_touch_solves",),
-        required_config=("left_wrist_info", "right_wrist_info", "center_gopro_info"),
+        required_config=(
+            "left_wrist_dev",
+            "right_wrist_dev",
+            "center_gopro_dev",
+            "left_wrist_info",
+            "right_wrist_info",
+            "center_gopro_info",
+        ),
+        commands=(
+            "ffmpeg -y -f v4l2 -input_format yuyv422 -video_size 1280x720 "
+            "-i {center_gopro_dev} -frames:v 1 {out}/images/center_gopro_world_board.jpg\n"
+            "\n"
+            "python3 {workspace}/scripts/solve_camera_extrinsics_from_board.py "
+            "--image {out}/images/center_gopro_world_board.jpg --camera-name center_gopro_optical_frame "
+            "--camera-info {center_gopro_info} --board-in-base {out}/extrinsics/world_board_identity.yaml "
+            "--output {out}/extrinsics/center_gopro_in_world.yaml "
+            "--overlay-output {out}/images/center_gopro_world_board_overlay.jpg "
+            "--frame-output {out}/images/center_gopro_world_board_frame.jpg --parent-frame world "
+            "--cols {world_cols} --rows {world_rows} --square-m {world_square_m} --marker-m {world_marker_m} "
+            "--start-id {world_start_id} --marker-count {world_marker_count} --aruco-dict {world_dict} "
+            "--min-markers 8\n"
+            "\n"
+            "# Repeat the wrist command template for at least five distinct poses per wrist.\n"
+            "ffmpeg -y -f v4l2 -input_format mjpeg -video_size 1280x800 "
+            "-i {left_wrist_dev} -frames:v 1 {out}/images/left_wrist_world_board_pose01.jpg\n"
+            "\n"
+            "python3 {workspace}/scripts/solve_camera_extrinsics_from_board.py "
+            "--image {out}/images/left_wrist_world_board_pose01.jpg "
+            "--camera-name left/wrist_camera_optical_frame --camera-info {left_wrist_info} "
+            "--board-in-base {out}/extrinsics/world_board_identity.yaml "
+            "--output {out}/extrinsics/left_wrist_pose01.yaml "
+            "--overlay-output {out}/images/left_wrist_world_board_pose01_overlay.jpg "
+            "--frame-output {out}/images/left_wrist_world_board_pose01_frame.jpg "
+            "--parent-frame world --mount-parent-frame world --mount-child-frame left/gripper_frame_link "
+            "--cols {world_cols} --rows {world_rows} --square-m {world_square_m} --marker-m {world_marker_m} "
+            "--start-id {world_start_id} --marker-count {world_marker_count} --aruco-dict {world_dict} "
+            "--min-markers 8\n"
+            "\n"
+            "ffmpeg -y -f v4l2 -input_format mjpeg -video_size 1280x800 "
+            "-i {right_wrist_dev} -frames:v 1 {out}/images/right_wrist_world_board_pose01.jpg\n"
+            "\n"
+            "python3 {workspace}/scripts/solve_camera_extrinsics_from_board.py "
+            "--image {out}/images/right_wrist_world_board_pose01.jpg "
+            "--camera-name right/wrist_camera_optical_frame --camera-info {right_wrist_info} "
+            "--board-in-base {out}/extrinsics/world_board_identity.yaml "
+            "--output {out}/extrinsics/right_wrist_pose01.yaml "
+            "--overlay-output {out}/images/right_wrist_world_board_pose01_overlay.jpg "
+            "--frame-output {out}/images/right_wrist_world_board_pose01_frame.jpg "
+            "--parent-frame world --mount-parent-frame world --mount-child-frame right/gripper_frame_link "
+            "--cols {world_cols} --rows {world_rows} --square-m {world_square_m} --marker-m {world_marker_m} "
+            "--start-id {world_start_id} --marker-count {world_marker_count} --aruco-dict {world_dict} "
+            "--min-markers 8",
+        ),
     ),
     Step(
         id="generate_camera_config",

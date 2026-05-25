@@ -83,6 +83,9 @@ source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install
 ```
 
+Do not include agent/tool names such as `codex` in branch names. Use short
+task-focused names, for example `intrinsics-auto-select`.
+
 From non-fish shells or agent tools on `grga`, `ssh_dell` is a fish-shell alias,
 not an SSH host named `ssh_dell`. Invoke it through fish when needed:
 

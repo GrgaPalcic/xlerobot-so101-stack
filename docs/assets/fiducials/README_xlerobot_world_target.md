@@ -40,8 +40,16 @@ Print the PDF at 100% / actual size. Disable fit-to-page and borderless scaling.
 Measure the printed ChArUco squares with calipers. Each square should be 20.0 mm.
 Mount each selected print to a rigid flat plate before calibration.
 
+PDF order:
+
+```text
+Page 1 top: Plate A, ids 49-65, preset world_plate_a_7x5_20_14_id49
+Page 1 bottom: Plate B, ids 66-82, preset world_plate_b_7x5_20_14_id66
+Page 2 center: Plate C, ids 83-99, preset world_plate_c_7x5_20_14_id83
+```
+
 Use Plate A by default. If the print quality, mounting, glare, or detection is poor,
-switch to Plate B or Plate C and change only WORLD_START_ID.
+switch to Plate B or Plate C by applying the matching board preset.
 
 Print file:
 
@@ -53,24 +61,13 @@ This is an A4 PDF containing three smaller plates. The important dimensions are
 the printed square and marker sizes, not the paper size. Mount the selected
 plate to a rigid flat backing before calibration.
 
-Use these runbook constants for Plate A:
+Use CLI presets rather than hand-exporting board constants:
 
 ```bash
-export WORLD_COLS=7
-export WORLD_ROWS=5
-export WORLD_SQUARE_M=0.020000
-export WORLD_MARKER_M=0.014000
-export WORLD_START_ID=49
-export WORLD_MARKER_COUNT=17
-export WORLD_DICT=DICT_5X5_100
-```
-
-Alternative start IDs:
-
-```text
-Plate A: WORLD_START_ID=49
-Plate B: WORLD_START_ID=66
-Plate C: WORLD_START_ID=83
+xlerobot-calib --workspace "$XLEROBOT_WS" --out "$XLEROBOT_RUN" board-presets
+xlerobot-calib --workspace "$XLEROBOT_WS" --out "$XLEROBOT_RUN" use-board-preset world_plate_a_7x5_20_14_id49
+xlerobot-calib --workspace "$XLEROBOT_WS" --out "$XLEROBOT_RUN" use-board-preset world_plate_b_7x5_20_14_id66
+xlerobot-calib --workspace "$XLEROBOT_WS" --out "$XLEROBOT_RUN" use-board-preset world_plate_c_7x5_20_14_id83
 ```
 
 ## CLI Presets

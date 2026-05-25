@@ -160,9 +160,17 @@ docs/assets/fiducials/charuco_board_presets.yaml
 
 The world-target PDF contains three independent plates. Use Plate A by default.
 If print quality, mounting, glare, or detection is poor, use Plate B or Plate C
-and change only `WORLD_START_ID` to match the plate label. The smaller plates
-are 140 mm x 100 mm patterns printed inside an A4 PDF; the physical target can
-be cut and mounted on an A5-sized or smaller rigid backing.
+by applying the matching board preset. The smaller plates are 140 mm x 100 mm
+patterns printed inside an A4 PDF; the physical target can be cut and mounted
+on an A5-sized or smaller rigid backing.
+
+PDF order from `docs/assets/fiducials/generate_xlerobot_world_target.py`:
+
+```text
+Page 1 top:    Plate A, ids 49-65, preset world_plate_a_7x5_20_14_id49
+Page 1 bottom: Plate B, ids 66-82, preset world_plate_b_7x5_20_14_id66
+Page 2 center: Plate C, ids 83-99, preset world_plate_c_7x5_20_14_id83
+```
 
 If the GoPro sees too few markers on the 7 x 5 target, print a 9 x 7 version
 with the same square and marker sizes. That gives 32 markers and a 0.180 m x
@@ -533,142 +541,28 @@ touching the arms. If they remain stiff, use the torque-off procedure from
 
 ## Intrinsic Calibration
 
-Use the large intrinsics board first. For the previous A3 board:
+Use the large A3 caib.io board for intrinsics. Apply the preset once to write
+the board dimensions into `run_state.yaml`; do not hand-export duplicate
+`INTR_*` constants.
 
 ```bash
 calib use-board-preset intrinsics_a3_11x8_34_25_id2
-
-export INTR_COLS=11
-export INTR_ROWS=8
-export INTR_SQUARE_M=0.034
-export INTR_MARKER_M=0.025
-export INTR_START_ID=2
-export INTR_MARKER_COUNT=44
-export INTR_DICT=DICT_5X5_100
 ```
 
-### Left Wrist Intrinsics
+The manual intrinsics steps print the capture and solve commands with the
+current preset values expanded from the run state:
 
 ```bash
-python3 scripts/capture_caib_marker_board_v4l2.py \
-  --device "$LEFT_WRIST_DEV" \
-  --width 1280 \
-  --height 800 \
-  --fps 30 \
-  --fourcc MJPG \
-  --camera-name left_wrist_arducam \
-  --output-dir "$OUT/intrinsics/left_wrist_capture" \
-  --aruco-dict "$INTR_DICT" \
-  --start-id "$INTR_START_ID" \
-  --marker-count "$INTR_MARKER_COUNT" \
-  --target-samples 55 \
-  --min-markers 8
-
-python3 scripts/calibrate_caib_marker_board_from_frames.py \
-  --frames-dir "$OUT/intrinsics/left_wrist_capture/frames" \
-  --output-dir "$OUT/intrinsics" \
-  --camera-name left_wrist_arducam \
-  --cols "$INTR_COLS" \
-  --rows "$INTR_ROWS" \
-  --square-m "$INTR_SQUARE_M" \
-  --marker-m "$INTR_MARKER_M" \
-  --start-id "$INTR_START_ID" \
-  --marker-count "$INTR_MARKER_COUNT" \
-  --aruco-dict "$INTR_DICT" \
-  --min-markers 8 \
-  --min-frames 20
+calib run-step intrinsics_left
+calib run-step intrinsics_right
+calib run-step intrinsics_gopro
 ```
-
-### Right Wrist Intrinsics
-
-```bash
-python3 scripts/capture_caib_marker_board_v4l2.py \
-  --device "$RIGHT_WRIST_DEV" \
-  --width 1280 \
-  --height 800 \
-  --fps 30 \
-  --fourcc MJPG \
-  --camera-name right_wrist_arducam \
-  --output-dir "$OUT/intrinsics/right_wrist_capture" \
-  --aruco-dict "$INTR_DICT" \
-  --start-id "$INTR_START_ID" \
-  --marker-count "$INTR_MARKER_COUNT" \
-  --target-samples 55 \
-  --min-markers 8
-
-python3 scripts/calibrate_caib_marker_board_from_frames.py \
-  --frames-dir "$OUT/intrinsics/right_wrist_capture/frames" \
-  --output-dir "$OUT/intrinsics" \
-  --camera-name right_wrist_arducam \
-  --cols "$INTR_COLS" \
-  --rows "$INTR_ROWS" \
-  --square-m "$INTR_SQUARE_M" \
-  --marker-m "$INTR_MARKER_M" \
-  --start-id "$INTR_START_ID" \
-  --marker-count "$INTR_MARKER_COUNT" \
-  --aruco-dict "$INTR_DICT" \
-  --min-markers 8 \
-  --min-frames 20
-```
-
-### Center GoPro Intrinsics
 
 Keep the GoPro in the exact same mode and resolution that runtime will use.
 Changing SuperView/wide/linear, resolution, or cropping invalidates intrinsics
-and extrinsics.
-
-Try the V4L2 capture first:
-
-```bash
-python3 scripts/capture_caib_marker_board_v4l2.py \
-  --device "$CENTER_GOPRO_DEV" \
-  --width 1280 \
-  --height 720 \
-  --fps 30 \
-  --fourcc YUYV \
-  --camera-name center_gopro_superview \
-  --output-dir "$OUT/intrinsics/center_gopro_capture" \
-  --aruco-dict "$INTR_DICT" \
-  --start-id "$INTR_START_ID" \
-  --marker-count "$INTR_MARKER_COUNT" \
-  --target-samples 70 \
-  --min-markers 8
-```
-
-If OpenCV blocks on `/dev/video42`, collect frames with ffmpeg instead:
-
-```bash
-mkdir -p "$OUT/intrinsics/center_gopro_capture/frames"
-
-for i in $(seq -w 1 70); do
-  read -r -p "Place board pose $i, hold still, press Enter..."
-  ffmpeg -y \
-    -f v4l2 \
-    -input_format yuyv422 \
-    -video_size 1280x720 \
-    -i "$CENTER_GOPRO_DEV" \
-    -frames:v 1 \
-    "$OUT/intrinsics/center_gopro_capture/frames/capture_${i}.jpg"
-done
-```
-
-Then calibrate:
-
-```bash
-python3 scripts/calibrate_caib_marker_board_from_frames.py \
-  --frames-dir "$OUT/intrinsics/center_gopro_capture/frames" \
-  --output-dir "$OUT/intrinsics" \
-  --camera-name center_gopro_superview \
-  --cols "$INTR_COLS" \
-  --rows "$INTR_ROWS" \
-  --square-m "$INTR_SQUARE_M" \
-  --marker-m "$INTR_MARKER_M" \
-  --start-id "$INTR_START_ID" \
-  --marker-count "$INTR_MARKER_COUNT" \
-  --aruco-dict "$INTR_DICT" \
-  --min-markers 8 \
-  --min-frames 25
-```
+and extrinsics. For GoPro, try the V4L2 capture command printed by
+`intrinsics_gopro` first; use its ffmpeg fallback only if OpenCV blocks on
+`/dev/video42`.
 
 The intrinsics solver auto-selects frames by default. No command changes are
 required: the solver first writes all-frame audit YAMLs, then writes the
@@ -681,112 +575,31 @@ SuperView feed, `rational_polynomial` is often the better candidate. For the
 Arducams, `plumb_bob` may be good enough. Record the chosen files:
 
 ```bash
-export LEFT_WRIST_INFO="$OUT/intrinsics/left_wrist_arducam_plumb_bob.yaml"
-export RIGHT_WRIST_INFO="$OUT/intrinsics/right_wrist_arducam_plumb_bob.yaml"
-export CENTER_GOPRO_INFO="$OUT/intrinsics/center_gopro_superview_rational_polynomial.yaml"
+calib set-config left_wrist_info "$OUT/intrinsics/left_wrist_arducam_plumb_bob.yaml"
+calib set-config right_wrist_info "$OUT/intrinsics/right_wrist_arducam_plumb_bob.yaml"
+calib set-config center_gopro_info "$OUT/intrinsics/center_gopro_superview_rational_polynomial.yaml"
 ```
 
 Adjust those paths if the summaries show a better model.
 
 ## Workspace Fiducial Constants
 
-Set these to match the smaller fixed target:
+Apply the preset for the physical plate you mounted. Plate A is the default.
+Use Plate B or Plate C only if that is the actual plate on the table.
 
 ```bash
 calib use-board-preset world_plate_a_7x5_20_14_id49
-
-export WORLD_COLS=7
-export WORLD_ROWS=5
-export WORLD_SQUARE_M=0.020
-export WORLD_MARKER_M=0.014
-export WORLD_START_ID=49
-export WORLD_MARKER_COUNT=17
-export WORLD_DICT=DICT_5X5_100
-
-python3 - <<'PY'
-import os
-cols = int(os.environ["WORLD_COLS"])
-rows = int(os.environ["WORLD_ROWS"])
-square = float(os.environ["WORLD_SQUARE_M"])
-print(f"WORLD_WIDTH_M={cols * square:.6f}")
-print(f"WORLD_HEIGHT_M={rows * square:.6f}")
-PY
-
-export WORLD_WIDTH_M=$(python3 - <<'PY'
-import os
-print(int(os.environ["WORLD_COLS"]) * float(os.environ["WORLD_SQUARE_M"]))
-PY
-)
-export WORLD_HEIGHT_M=$(python3 - <<'PY'
-import os
-print(int(os.environ["WORLD_ROWS"]) * float(os.environ["WORLD_SQUARE_M"]))
-PY
-)
 ```
 
-Create a `world -> calibration_board` identity YAML for camera PnP. This is
-valid because the fixed target defines `world`.
+The preset writes `world_cols`, `world_rows`, `world_square_m`,
+`world_marker_m`, `world_start_id`, `world_marker_count`, and `world_dict` into
+`run_state.yaml`. The wizard action below uses those values directly.
+
+Generate the `world -> calibration_board` identity YAML and the support-plane
+YAML from the preset-backed run state:
 
 ```bash
-python3 - <<'PY'
-import os
-from pathlib import Path
-import yaml
-
-out = Path(os.environ["OUT"])
-data = {
-    "timestamp_utc": os.environ.get("RUN_ID", ""),
-    "transform": {
-        "name": "T_world_board",
-        "parent_frame": "world",
-        "child_frame": "calibration_board",
-        "translation_xyz": [0.0, 0.0, 0.0],
-        "rotation_matrix": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-        "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
-    },
-    "board": {
-        "source": "fixed workspace caib.io marker board",
-        "dictionary": os.environ["WORLD_DICT"],
-        "start_id": int(os.environ["WORLD_START_ID"]),
-        "marker_count": int(os.environ["WORLD_MARKER_COUNT"]),
-        "cols": int(os.environ["WORLD_COLS"]),
-        "rows": int(os.environ["WORLD_ROWS"]),
-        "square_m": float(os.environ["WORLD_SQUARE_M"]),
-        "marker_m": float(os.environ["WORLD_MARKER_M"]),
-        "width_m": float(os.environ["WORLD_WIDTH_M"]),
-        "height_m": float(os.environ["WORLD_HEIGHT_M"]),
-    },
-}
-path = out / "extrinsics/world_board_identity.yaml"
-path.write_text(yaml.safe_dump(data, sort_keys=False))
-print(path)
-PY
-```
-
-Create a support-plane YAML in `world`, used when the grasp server runs with
-`base_frame:=world`:
-
-```bash
-python3 - <<'PY'
-import os
-from pathlib import Path
-import yaml
-
-out = Path(os.environ["OUT"])
-w = float(os.environ["WORLD_WIDTH_M"])
-h = float(os.environ["WORLD_HEIGHT_M"])
-data = {
-    "points_xyz_in_base": {
-        "top_left": [0.0, 0.0, 0.0],
-        "bottom_left": [0.0, h, 0.0],
-        "bottom_right": [w, h, 0.0],
-    },
-    "note": "World support plane. Valid only if the fixed target plane is the object support plane.",
-}
-path = out / "extrinsics/world_support_plane.yaml"
-path.write_text(yaml.safe_dump(data, sort_keys=False))
-print(path)
-PY
+calib run-step generate_world_files
 ```
 
 ## Solve Each Arm Base From Touches
@@ -798,38 +611,12 @@ If both arms can reach all four corners, use `tl_tr_bl_br`. If a corner is not
 reachable, use `tl_bl_br`. The smaller world target is meant to make all four
 corners reachable.
 
-Terminal with both state-only launches already running:
+Terminal with both state-only launches already running. These manual steps
+print commands with the current world-board preset expanded from run state:
 
 ```bash
-python3 scripts/record_board_touch_points.py \
-  --base-frame left/base_link \
-  --tool-frame left/gripper_frame_link \
-  --tool-offset "0 0 0" \
-  --cols "$WORLD_COLS" \
-  --rows "$WORLD_ROWS" \
-  --square-m "$WORLD_SQUARE_M" \
-  --marker-m "$WORLD_MARKER_M" \
-  --start-id "$WORLD_START_ID" \
-  --dictionary "$WORLD_DICT" \
-  --corner-layout tl_tr_bl_br \
-  --samples 11 \
-  --output "$OUT/touch/left_base_to_world_board.yaml" \
-  2>&1 | tee "$OUT/logs/left_board_touch.txt"
-
-python3 scripts/record_board_touch_points.py \
-  --base-frame right/base_link \
-  --tool-frame right/gripper_frame_link \
-  --tool-offset "0 0 0" \
-  --cols "$WORLD_COLS" \
-  --rows "$WORLD_ROWS" \
-  --square-m "$WORLD_SQUARE_M" \
-  --marker-m "$WORLD_MARKER_M" \
-  --start-id "$WORLD_START_ID" \
-  --dictionary "$WORLD_DICT" \
-  --corner-layout tl_tr_bl_br \
-  --samples 11 \
-  --output "$OUT/touch/right_base_to_world_board.yaml" \
-  2>&1 | tee "$OUT/logs/right_board_touch.txt"
+calib run-step touch_left_base
+calib run-step touch_right_base
 ```
 
 If top-right is not reachable:
@@ -948,42 +735,15 @@ ros2 run tf2_ros tf2_echo world right/gripper_frame_link 2>&1 | tee "$OUT/logs/w
 ## Center GoPro Extrinsic In World
 
 Place the fixed workspace target where the GoPro sees at least 8 markers. Use
-the same target constants as above.
-
-Capture one clean frame:
+the same board preset already recorded in `run_state.yaml`.
 
 ```bash
-ffmpeg -y \
-  -f v4l2 \
-  -input_format yuyv422 \
-  -video_size 1280x720 \
-  -i "$CENTER_GOPRO_DEV" \
-  -frames:v 1 \
-  "$OUT/images/center_gopro_world_board.jpg"
+calib run-step camera_extrinsics
 ```
 
-Solve `world -> center_gopro_optical_frame`:
-
-```bash
-python3 scripts/solve_camera_extrinsics_from_board.py \
-  --image "$OUT/images/center_gopro_world_board.jpg" \
-  --camera-name center_gopro_optical_frame \
-  --camera-info "$CENTER_GOPRO_INFO" \
-  --board-in-base "$OUT/extrinsics/world_board_identity.yaml" \
-  --output "$OUT/extrinsics/center_gopro_in_world.yaml" \
-  --overlay-output "$OUT/images/center_gopro_world_board_overlay.jpg" \
-  --frame-output "$OUT/images/center_gopro_world_board_frame.jpg" \
-  --parent-frame world \
-  --cols "$WORLD_COLS" \
-  --rows "$WORLD_ROWS" \
-  --square-m "$WORLD_SQUARE_M" \
-  --marker-m "$WORLD_MARKER_M" \
-  --start-id "$WORLD_START_ID" \
-  --marker-count "$WORLD_MARKER_COUNT" \
-  --aruco-dict "$WORLD_DICT" \
-  --min-markers 8 \
-  2>&1 | tee "$OUT/logs/center_gopro_extrinsic.txt"
-```
+This manual step prints the center GoPro solve and wrist-pose templates with
+the current board preset, camera device paths, and camera-info YAML paths
+expanded from `run_state.yaml`.
 
 Accept only if:
 
@@ -1015,40 +775,8 @@ wrist camera sees the fixed target clearly.
 
 ### Left Wrist
 
-For pose 1:
-
-```bash
-ffmpeg -y \
-  -f v4l2 \
-  -input_format mjpeg \
-  -video_size 1280x800 \
-  -i "$LEFT_WRIST_DEV" \
-  -frames:v 1 \
-  "$OUT/images/left_wrist_world_board_pose01.jpg"
-
-python3 scripts/solve_camera_extrinsics_from_board.py \
-  --image "$OUT/images/left_wrist_world_board_pose01.jpg" \
-  --camera-name left/wrist_camera_optical_frame \
-  --camera-info "$LEFT_WRIST_INFO" \
-  --board-in-base "$OUT/extrinsics/world_board_identity.yaml" \
-  --output "$OUT/extrinsics/left_wrist_pose01.yaml" \
-  --overlay-output "$OUT/images/left_wrist_world_board_pose01_overlay.jpg" \
-  --frame-output "$OUT/images/left_wrist_world_board_pose01_frame.jpg" \
-  --parent-frame world \
-  --mount-parent-frame world \
-  --mount-child-frame left/gripper_frame_link \
-  --cols "$WORLD_COLS" \
-  --rows "$WORLD_ROWS" \
-  --square-m "$WORLD_SQUARE_M" \
-  --marker-m "$WORLD_MARKER_M" \
-  --start-id "$WORLD_START_ID" \
-  --marker-count "$WORLD_MARKER_COUNT" \
-  --aruco-dict "$WORLD_DICT" \
-  --min-markers 8 \
-  2>&1 | tee "$OUT/logs/left_wrist_pose01_extrinsic.txt"
-```
-
-Repeat for at least five distinct poses:
+Use the left-wrist template printed by `calib run-step camera_extrinsics` and
+repeat it for at least five distinct poses:
 
 ```text
 pose01: centered target, medium range
@@ -1062,38 +790,8 @@ Name the outputs `left_wrist_pose02.yaml`, and so on.
 
 ### Right Wrist
 
-Repeat the same sequence with the right wrist camera:
-
-```bash
-ffmpeg -y \
-  -f v4l2 \
-  -input_format mjpeg \
-  -video_size 1280x800 \
-  -i "$RIGHT_WRIST_DEV" \
-  -frames:v 1 \
-  "$OUT/images/right_wrist_world_board_pose01.jpg"
-
-python3 scripts/solve_camera_extrinsics_from_board.py \
-  --image "$OUT/images/right_wrist_world_board_pose01.jpg" \
-  --camera-name right/wrist_camera_optical_frame \
-  --camera-info "$RIGHT_WRIST_INFO" \
-  --board-in-base "$OUT/extrinsics/world_board_identity.yaml" \
-  --output "$OUT/extrinsics/right_wrist_pose01.yaml" \
-  --overlay-output "$OUT/images/right_wrist_world_board_pose01_overlay.jpg" \
-  --frame-output "$OUT/images/right_wrist_world_board_pose01_frame.jpg" \
-  --parent-frame world \
-  --mount-parent-frame world \
-  --mount-child-frame right/gripper_frame_link \
-  --cols "$WORLD_COLS" \
-  --rows "$WORLD_ROWS" \
-  --square-m "$WORLD_SQUARE_M" \
-  --marker-m "$WORLD_MARKER_M" \
-  --start-id "$WORLD_START_ID" \
-  --marker-count "$WORLD_MARKER_COUNT" \
-  --aruco-dict "$WORLD_DICT" \
-  --min-markers 8 \
-  2>&1 | tee "$OUT/logs/right_wrist_pose01_extrinsic.txt"
-```
+Repeat the same sequence with the right-wrist template printed by
+`calib run-step camera_extrinsics`.
 
 ### Wrist Consistency Check
 
@@ -1163,84 +861,7 @@ smoke test, use the lowest reprojection-error pose only if consistency is good.
 Generate a per-run camera launch config. This does not modify checked-in files.
 
 ```bash
-python3 - <<'PY'
-import os
-from pathlib import Path
-import yaml
-
-out = Path(os.environ["OUT"])
-param_path = out / "config/xlerobot_opencv_cam.yaml"
-cameras_path = out / "config/xlerobot_cameras.yaml"
-
-params = {
-    "/**": {"ros__parameters": {"framerate": 30.0, "jpeg_quality": 85}},
-    "/left/cam_wrist": {
-        "ros__parameters": {
-            "video_device": os.environ["LEFT_WRIST_DEV"],
-            "fourcc": "MJPG",
-            "image_width": 1280,
-            "image_height": 800,
-            "fallback_fov_degrees": 70.0,
-            "frame_id": "left/wrist_camera_optical_frame",
-            "camera_name": "left_wrist_arducam",
-        }
-    },
-    "/right/cam_wrist": {
-        "ros__parameters": {
-            "video_device": os.environ["RIGHT_WRIST_DEV"],
-            "fourcc": "MJPG",
-            "image_width": 1280,
-            "image_height": 800,
-            "fallback_fov_degrees": 70.0,
-            "frame_id": "right/wrist_camera_optical_frame",
-            "camera_name": "right_wrist_arducam",
-        }
-    },
-    "/center_gopro/cam_overhead": {
-        "ros__parameters": {
-            "video_device": os.environ["CENTER_GOPRO_DEV"],
-            "fourcc": "YUYV",
-            "capture_backend": "ffmpeg_raw",
-            "ffmpeg_input_format": "yuyv422",
-            "image_width": 1280,
-            "image_height": 720,
-            "fallback_fov_degrees": 113.0,
-            "frame_id": "center_gopro_optical_frame",
-            "camera_name": "center_gopro_superview",
-        }
-    },
-}
-param_path.write_text(yaml.safe_dump(params, sort_keys=False))
-
-cameras = {
-    "cameras": [
-        {
-            "name": "cam_wrist",
-            "camera_type": "opencv_compressed",
-            "param_path": str(param_path),
-            "namespace": "left",
-            "camera_info_url": "file://" + os.environ["LEFT_WRIST_INFO"],
-        },
-        {
-            "name": "cam_wrist",
-            "camera_type": "opencv_compressed",
-            "param_path": str(param_path),
-            "namespace": "right",
-            "camera_info_url": "file://" + os.environ["RIGHT_WRIST_INFO"],
-        },
-        {
-            "name": "cam_overhead",
-            "camera_type": "opencv_compressed",
-            "param_path": str(param_path),
-            "namespace": "center_gopro",
-            "camera_info_url": "file://" + os.environ["CENTER_GOPRO_INFO"],
-        },
-    ]
-}
-cameras_path.write_text(yaml.safe_dump(cameras, sort_keys=False))
-print(param_path)
-print(cameras_path)
-PY
+calib run-step generate_camera_config
 ```
 
 Launch cameras:

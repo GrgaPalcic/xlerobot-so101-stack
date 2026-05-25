@@ -218,6 +218,20 @@ def generate(args: argparse.Namespace) -> list[Path]:
         )
     )
 
+    pdf_positions = ["Page 1 top", "Page 1 bottom", "Page 2 center"]
+    pdf_order_lines = []
+    preset_lines = ['xlerobot-calib --workspace "$XLEROBOT_WS" --out "$XLEROBOT_RUN" board-presets']
+    for index, target in enumerate(targets):
+        plate = target.label[-1].lower()
+        position = pdf_positions[index] if index < len(pdf_positions) else f"Plate slot {index + 1}"
+        preset = f"world_plate_{plate}_{args.cols}x{args.rows}_{args.square_mm:g}_{args.marker_mm:g}_id{target.start_id}"
+        pdf_order_lines.append(
+            f"{position}: {target.label}, ids {target.ids[0]}-{target.ids[-1]}, preset {preset}"
+        )
+        preset_lines.append(
+            f'xlerobot-calib --workspace "$XLEROBOT_WS" --out "$XLEROBOT_RUN" use-board-preset {preset}'
+        )
+
     readme = out_dir / "README_xlerobot_world_target.md"
     readme.write_text(
         "\n".join(
@@ -240,8 +254,14 @@ def generate(args: argparse.Namespace) -> list[Path]:
                 "Measure the printed ChArUco squares with calipers. Each square should be 20.0 mm.",
                 "Mount each selected print to a rigid flat plate before calibration.",
                 "",
+                "PDF order:",
+                "",
+                "```text",
+                *pdf_order_lines,
+                "```",
+                "",
                 "Use Plate A by default. If the print quality, mounting, glare, or detection is poor,",
-                "switch to Plate B or Plate C and change only WORLD_START_ID.",
+                "switch to Plate B or Plate C by applying the matching board preset.",
                 "",
                 "Print file:",
                 "",
@@ -249,22 +269,10 @@ def generate(args: argparse.Namespace) -> list[Path]:
                 f"{base}_a4.pdf",
                 f"```",
                 "",
-                "Use these runbook constants for Plate A:",
+                "Use the CLI presets rather than hand-exporting board constants:",
                 "",
                 "```bash",
-                f"export WORLD_COLS={args.cols}",
-                f"export WORLD_ROWS={args.rows}",
-                f"export WORLD_SQUARE_M={args.square_mm / 1000.0:.6f}",
-                f"export WORLD_MARKER_M={args.marker_mm / 1000.0:.6f}",
-                f"export WORLD_START_ID={targets[0].start_id}",
-                f"export WORLD_MARKER_COUNT={marker_count}",
-                "export WORLD_DICT=DICT_5X5_100",
-                "```",
-                "",
-                "Alternative start IDs:",
-                "",
-                "```text",
-                *[f"{target.label}: WORLD_START_ID={target.start_id}" for target in targets],
+                *preset_lines,
                 "```",
                 "",
             ]

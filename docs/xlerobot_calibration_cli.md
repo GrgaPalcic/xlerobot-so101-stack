@@ -148,7 +148,8 @@ calib use-board-preset world_plate_a_7x5_20_14_id49
 
 Use the large A3 caib.io board for intrinsics. Use one of the smaller rigid
 workspace plates for world/base solves and camera extrinsics. Plate A is the
-default; Plate B and Plate C only change `world_start_id`.
+default. Plate B and Plate C are separate boards in the same PDF; switch by
+applying the matching preset instead of hand-editing exported constants.
 
 ## Extraction Plan
 
