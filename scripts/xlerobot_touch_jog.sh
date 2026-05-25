@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eo pipefail
 
 if [[ $# -lt 1 || "$1" != "left" && "$1" != "right" ]]; then
   echo "usage: $0 left|right [touch-jog options]" >&2
@@ -14,6 +14,7 @@ cd "$ws"
 
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
+set -u
 
 exec ros2 run xlerobot_calibration xlerobot-calib \
   --workspace "$ws" \
