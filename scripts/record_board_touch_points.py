@@ -347,6 +347,7 @@ class JogSession:
         T = wait_for_tool_pose(
             self.tf_buffer, self.base_frame, self.tool_frame, self.timeout_s
         )
+        before_point = T[:3, 3] + T[:3, :3] @ self.tool_offset
         T[:3, 3] += delta_xyz
 
         request = GoToPose.Request()
@@ -364,12 +365,29 @@ class JogSession:
             raise RuntimeError("jog service returned no response")
         if not response.success:
             raise RuntimeError(f"jog failed: {response.message}")
+        time.sleep(0.2)
+        observed_T = wait_for_tool_pose(
+            self.tf_buffer, self.base_frame, self.tool_frame, self.timeout_s
+        )
+        after_point = observed_T[:3, 3] + observed_T[:3, :3] @ self.tool_offset
+        observed_delta = after_point - before_point
         print(
-            f"  moved delta xyz: "
+            f"  commanded delta xyz: "
             f"{delta_xyz[0] * 1000.0: .1f} "
             f"{delta_xyz[1] * 1000.0: .1f} "
             f"{delta_xyz[2] * 1000.0: .1f} mm"
         )
+        print(
+            f"  observed touch delta: "
+            f"{observed_delta[0] * 1000.0: .1f} "
+            f"{observed_delta[1] * 1000.0: .1f} "
+            f"{observed_delta[2] * 1000.0: .1f} mm"
+        )
+        if np.linalg.norm(observed_delta) < max(0.0005, 0.25 * np.linalg.norm(delta_xyz)):
+            print(
+                "  WARNING: TF barely moved. The arm may not be executing commands, "
+                "or the step is below backlash/visibility."
+            )
 
 
 def normalize(vec: np.ndarray, name: str) -> np.ndarray:

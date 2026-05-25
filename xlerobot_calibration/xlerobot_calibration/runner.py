@@ -231,6 +231,7 @@ def run_touch_jog(
     samples: int = 11,
     jog_step_m: float = 0.002,
     jog_duration_sec: float = 1.5,
+    stop_existing: bool = True,
     dry_run: bool = False,
     yes: bool = False,
 ) -> None:
@@ -254,12 +255,20 @@ def run_touch_jog(
     print("")
     print(f"# Touch jog: {side}")
     print("This starts a real command controller and sends small GoToPose moves.")
-    print("Stop state-only/teleop for this arm before continuing.")
+    print("Any existing same-side state-only/jog launch will be stopped first.")
     print("")
     print("Commands that will run:")
     print(shell_join(bringup_cmd))
     print(shell_join(motion_cmd))
     print(shell_join(recorder_cmd))
+    existing = find_side_control_processes(side)
+    if existing:
+        print("")
+        print(f"Existing {side} ROS control processes detected:")
+        for proc in existing:
+            print(f"  pid={proc['pid']} {proc['cmd']}")
+        if not stop_existing:
+            raise StepError(f"existing {side} ROS control processes are running")
     print("")
 
     if dry_run:
@@ -294,17 +303,18 @@ def run_touch_jog(
         return proc
 
     try:
+        if existing and stop_existing:
+            print(f"Stopping existing {side} ROS control processes...")
+            stop_side_control_processes(side)
+            _wait_for_controller_manager_absent(side, timeout_s=8.0)
+
         print(f"Starting arm bringup; log: {bringup_log}")
         bringup = start_logged(bringup_cmd, bringup_log)
-        time.sleep(4.0)
-        if bringup.poll() is not None:
-            raise StepError(_process_failure_message("arm bringup", bringup, bringup_log))
+        _wait_for_controller_active(side, bringup, bringup_log, timeout_s=18.0)
 
         print(f"Starting Cartesian motion node; log: {motion_log}")
         motion = start_logged(motion_cmd, motion_log)
-        time.sleep(2.0)
-        if motion.poll() is not None:
-            raise StepError(_process_failure_message("Cartesian motion node", motion, motion_log))
+        _wait_for_service(f"/{side}/go_to_pose", motion, motion_log, timeout_s=12.0)
 
         print("")
         print("Recorder starting. At each corner prompt, use x+/x-/y+/y-/z+/z- then Enter/sample.")
@@ -322,6 +332,139 @@ def run_touch_jog(
             log_file = getattr(proc, "_xlerobot_log_file", None)
             if log_file is not None:
                 log_file.close()
+
+
+def find_side_control_processes(side: str) -> list[dict[str, str]]:
+    result = subprocess.run(
+        ["ps", "-eo", "pid=,args="],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    side_tokens = (f"namespace:={side}", f"__ns:=/{side}")
+    control_tokens = (
+        "follower_split.launch.py",
+        "follower_state_only.launch.py",
+        "cartesian_motion_split.launch.py",
+        "cartesian_motion_node",
+        "ros2_control_node",
+        "robot_state_publisher",
+        "controller_manager/spawner",
+    )
+    current_pid = os.getpid()
+    found: list[dict[str, str]] = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        pid_text, _, cmd = line.partition(" ")
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        if pid == current_pid:
+            continue
+        if not any(token in cmd for token in side_tokens):
+            continue
+        if not any(token in cmd for token in control_tokens):
+            continue
+        found.append({"pid": str(pid), "cmd": cmd.strip()})
+    return found
+
+
+def stop_side_control_processes(side: str) -> None:
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
+        procs = find_side_control_processes(side)
+        if not procs:
+            return
+        for proc in procs:
+            try:
+                os.kill(int(proc["pid"]), sig)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                pass
+        time.sleep(2.0 if sig != signal.SIGKILL else 0.5)
+
+
+def _wait_for_controller_manager_absent(side: str, timeout_s: float) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if not _service_exists(f"/{side}/controller_manager/list_controllers"):
+            return
+        time.sleep(0.3)
+
+
+def _wait_for_controller_active(
+    side: str,
+    bringup: subprocess.Popen[str],
+    log_path: Path,
+    *,
+    timeout_s: float,
+) -> None:
+    deadline = time.monotonic() + timeout_s
+    last_output = ""
+    while time.monotonic() < deadline:
+        if bringup.poll() is not None:
+            raise StepError(_process_failure_message("arm bringup", bringup, log_path))
+        result = subprocess.run(
+            ["ros2", "control", "list_controllers", "-c", f"/{side}/controller_manager"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+            timeout=3.0,
+        )
+        last_output = result.stdout or ""
+        if (
+            "joint_state_broadcaster" in last_output
+            and "joint_state_broadcaster" in _active_controller_lines(last_output)
+            and "arm_forward_controller" in _active_controller_lines(last_output)
+        ):
+            print(f"{side} arm_forward_controller is active.")
+            return
+        time.sleep(0.5)
+    tail = _tail_file(log_path, 30)
+    raise StepError(
+        f"{side} arm_forward_controller did not become active.\n"
+        f"Last controller output:\n{last_output}\n"
+        f"Bringup log tail:\n{tail}"
+    )
+
+
+def _active_controller_lines(text: str) -> str:
+    return "\n".join(line for line in text.splitlines() if " active" in line)
+
+
+def _wait_for_service(
+    service_name: str,
+    proc: subprocess.Popen[str],
+    log_path: Path,
+    *,
+    timeout_s: float,
+) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            raise StepError(_process_failure_message("Cartesian motion node", proc, log_path))
+        if _service_exists(service_name):
+            print(f"{service_name} is available.")
+            return
+        time.sleep(0.3)
+    raise StepError(f"{service_name} did not become available.\n{_tail_file(log_path, 30)}")
+
+
+def _service_exists(service_name: str) -> bool:
+    result = subprocess.run(
+        ["ros2", "service", "list"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=3.0,
+    )
+    return service_name in result.stdout.splitlines()
 
 
 def _terminate_process_group(proc: subprocess.Popen[str]) -> None:
@@ -342,11 +485,14 @@ def _terminate_process_group(proc: subprocess.Popen[str]) -> None:
 
 
 def _process_failure_message(label: str, proc: subprocess.Popen[str], log_path: Path) -> str:
-    tail = ""
-    if log_path.exists():
-        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-        tail = "\n".join(lines[-20:])
+    tail = _tail_file(log_path, 20)
     return f"{label} exited {proc.returncode}; see {log_path}\n{tail}"
+
+
+def _tail_file(path: Path, lines: int) -> str:
+    if not path.exists():
+        return ""
+    return "\n".join(path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])
 
 
 def run_action_step(state: dict[str, Any], step: Step, *, dry_run: bool) -> None:
