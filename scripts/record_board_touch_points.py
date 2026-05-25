@@ -694,7 +694,7 @@ class JointJogSession:
             f"{math.degrees(sign * step): .1f} deg"
         )
         print(f"  observed {joint_name}:  {math.degrees(observed): .1f} deg")
-        if abs(observed) < max(0.002, 0.25 * abs(step)):
+        if abs(step) >= 0.05 and abs(observed) < max(0.005, 0.20 * abs(step)):
             print("  WARNING: joint barely moved; check torque/controller or increase jstep")
 
 
@@ -951,7 +951,9 @@ class JogSession:
             f"{observed_delta[1] * 1000.0: .1f} "
             f"{observed_delta[2] * 1000.0: .1f} mm"
         )
-        if np.linalg.norm(observed_delta) < max(0.0005, 0.25 * np.linalg.norm(delta_xyz)):
+        commanded_norm = float(np.linalg.norm(delta_xyz))
+        observed_norm = float(np.linalg.norm(observed_delta))
+        if commanded_norm >= 0.005 and observed_norm < max(0.001, 0.20 * commanded_norm):
             print(
                 "  WARNING: TF barely moved. The arm may not be executing commands, "
                 "or the step is below backlash/visibility."

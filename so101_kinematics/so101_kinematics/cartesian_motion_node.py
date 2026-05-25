@@ -295,6 +295,7 @@ class CartesianMotionNode(Node):
                 self._q_measured.copy(), T_goal, strategy=strategy, **kwargs,
             )
         except Exception as e:
+            self.get_logger().error(f"go_to_pose planning failed: {e}")
             response.success = False
             response.message = f"Planning failed: {e}"
             return response
