@@ -644,6 +644,16 @@ previous failed process may still have torque enabled. Stop the launch/processes
 first; if the arm remains stiff, run the torque-off snippet at the end of this
 runbook using the current left/right ports.
 
+Before accepting the touch solves, measure the physical world target. With the
+default Plate A preset, each square must be 20.0 mm and the outer
+checkerboard-pattern size must be 140 mm x 100 mm. If the print was scaled, fix
+the preset/config or reprint at actual size before touching. Also make the
+physical contact point match `--tool-offset`: `--tool-offset '0 0 0'` assumes
+`gripper_frame_link` itself is the touch point. If touching with a fingertip,
+jaw edge, taped pointer, or other offset point, either measure and pass that
+offset in `gripper_frame_link`, or keep wrist/gripper orientation as constant as
+possible across all touched corners.
+
 If top-right is not reachable:
 
 ```bash
