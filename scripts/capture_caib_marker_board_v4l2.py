@@ -166,7 +166,11 @@ def _start_preview_server(output_dir: Path, port: int, capture_trigger: Path):
                 self.send_response(204)
                 self.end_headers()
                 return
-            super().do_GET()
+            try:
+                super().do_GET()
+            except (BrokenPipeError, ConnectionResetError):
+                # Browser refreshes intentionally abort stale image requests.
+                pass
 
         def log_message(self, _format, *_args):
             return
