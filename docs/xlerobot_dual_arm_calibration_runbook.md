@@ -646,6 +646,17 @@ time. Stop the state-only launch for that arm first, make sure teleop is not
 running, then start the command-enabled split launch with the forward arm
 controller.
 
+Set the same variables in each terminal before using the commands below:
+
+```bash
+export WS=/home/dell/Documents/xlerobot-so101-stack
+export OUT=$WS/field_runs/xlerobot_printed_plate_20260520
+export LEFT_PORT=/dev/serial/by-path/pci-0000:00:14.0-usb-0:1.4:1.0-port0
+export RIGHT_PORT=/dev/serial/by-path/pci-0000:00:14.0-usb-0:1.3:1.0-port0
+export LEFT_JOINT_CONFIG=$OUT/config/left_joints_from_lerobot.yaml
+export RIGHT_JOINT_CONFIG=$OUT/config/right_joints_from_lerobot.yaml
+```
+
 Left terminal L1:
 
 ```bash
