@@ -670,6 +670,12 @@ python3 scripts/calibrate_caib_marker_board_from_frames.py \
   --min-frames 25
 ```
 
+The intrinsics solver auto-selects frames by default. No command changes are
+required: the solver first writes all-frame audit YAMLs, then writes the
+filtered calibration to the expected YAML names. If median or worst errors look
+high, inspect `caib_marker_board_calibration_summary.json` and the per-model
+`*_frame_diagnostics.csv` files before recapturing.
+
 Pick the YAML with the better median/worst view error. For the GoPro
 SuperView feed, `rational_polynomial` is often the better candidate. For the
 Arducams, `plumb_bob` may be good enough. Record the chosen files:
