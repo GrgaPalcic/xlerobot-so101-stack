@@ -199,6 +199,7 @@ def parse_args():
     parser.add_argument("--max-motion-px", type=float, default=3.0)
     parser.add_argument("--min-param-dist", type=float, default=0.11)
     parser.add_argument("--capture-cooldown-s", type=float, default=0.7)
+    parser.add_argument("--warmup-s", type=float, default=2.0, help="Seconds to wait after opening the camera before saving captures")
     parser.add_argument("--auto-capture", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--preview-port", type=int, default=0, help="Serve preview.html on this port; 0 disables HTTP serving")
     parser.add_argument("--preview-every-s", type=float, default=0.2, help="How often to refresh latest_detection.jpg")
@@ -249,6 +250,7 @@ def main() -> int:
     last_capture = 0.0
     last_status = 0.0
     last_preview = 0.0
+    start_time = time.monotonic()
     count = 0
     while not stop and count < args.target_samples:
         ok, frame = cap.read()
@@ -284,6 +286,11 @@ def main() -> int:
             if manual_capture and now - last_capture >= args.capture_cooldown_s:
                 capture = True
                 capture_reason = "manual"
+            warmup_remaining = args.warmup_s - (now - start_time)
+            if warmup_remaining > 0.0:
+                capture = False
+                capture_reason = ""
+                message += f" warmup={warmup_remaining:.1f}s"
         else:
             prev_centers = None
             message += f"; need {args.min_markers}"

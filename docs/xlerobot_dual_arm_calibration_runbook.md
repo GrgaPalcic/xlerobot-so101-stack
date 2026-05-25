@@ -561,7 +561,10 @@ calib run-step intrinsics_gopro
 Each printed capture command starts a browser preview on port 8765. Open
 `http://192.168.1.73:8765/preview.html` while the capture command is running to
 see the live detection overlay and optionally force a capture of the current
-pose. The script still auto-captures stable, diverse board poses.
+pose. The script still auto-captures stable, diverse board poses. The printed
+commands are intentionally conservative for final intrinsics: they collect more
+samples than the minimum, wait briefly for camera warmup, and require a still
+board before saving each frame.
 
 Keep the GoPro in the exact same mode and resolution that runtime will use.
 Changing SuperView/wide/linear, resolution, or cropping invalidates intrinsics
