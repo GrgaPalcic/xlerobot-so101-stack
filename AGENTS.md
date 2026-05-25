@@ -50,6 +50,50 @@ grasp server package: grasp_server/
 future heavy planner: DGX/Qwen service, not ROS control
 ```
 
+## Machine Roles and Development Flow
+
+Treat the `grga` machine and the Dell laptop as two working checkouts of the
+same repository with different responsibilities.
+
+`grga` is the primary development and inference machine. Do normal code editing,
+branching, committing, GPU/model work, and heavy perception or policy inference
+from `/home/grga/Documents/so101-ros-physical-ai`.
+
+The Dell laptop is the actuator/robot machine. Use it for ROS 2 Jazzy builds and
+tests that need the robot-side environment, MoveIt, cameras, calibration runs,
+and any validation that depends on the physical SO-101 setup. Do not use the
+Dell checkout as a separate source of truth; it should normally receive changes
+through git.
+
+Preferred cross-machine workflow:
+
+```bash
+# on grga
+git switch -c <branch>
+git commit
+git push -u origin <branch>
+
+# on Dell
+ssh_dell
+cd /home/dell/Documents/xlerobot-so101-stack
+git fetch origin <branch>
+git switch <branch>
+git pull --ff-only
+source /opt/ros/jazzy/setup.bash
+colcon build --symlink-install
+```
+
+From non-fish shells or agent tools on `grga`, `ssh_dell` is a fish-shell alias,
+not an SSH host named `ssh_dell`. Invoke it through fish when needed:
+
+```bash
+fish -lc 'ssh_dell "cd /home/dell/Documents/xlerobot-so101-stack && git status --short"'
+```
+
+Do not create ad hoc Dell worktrees or copy patched files over SSH when a branch
+push/pull will do. Use direct file copy only for temporary field artifacts or
+explicitly requested one-off recovery work.
+
 ## System Story
 
 The intended runtime split is:
