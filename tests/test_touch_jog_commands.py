@@ -93,6 +93,13 @@ def test_parse_reference_command():
     assert module.parse_jog_command("distance").kind == "reference"
 
 
+def test_parse_sync_command():
+    module = load_module()
+
+    assert module.parse_jog_command("sync").kind == "sync"
+    assert module.parse_jog_command("rebase").kind == "sync"
+
+
 def test_expected_corner_distance():
     module = load_module()
 

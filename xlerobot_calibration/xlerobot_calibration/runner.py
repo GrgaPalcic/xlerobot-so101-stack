@@ -278,7 +278,7 @@ def run_touch_jog(
 
     print("")
     print(f"# Touch jog: {side}")
-    print("This starts a real command controller and sends small GoToPose moves.")
+    print("This starts a real command controller and sends small jog moves.")
     print("Any existing same-side state-only/jog launch will be stopped first.")
     print("")
     print("Commands that will run:")

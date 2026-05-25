@@ -228,6 +228,7 @@ WEB_UI_HTML = """<!doctype html>
   <div class="row">
     <button onclick="send('ref')">Ref</button>
     <button onclick="send('pose')">Pose</button>
+    <button onclick="send('sync')">Sync Joints</button>
     <button class="primary" onclick="send('sample')">Sample Corner</button>
     <button class="warn" onclick="send('q')">Quit</button>
   </div>
@@ -432,6 +433,8 @@ def parse_jog_command(text: str) -> JogCommand:
         return JogCommand("pose")
     if command in ("ref", "reference", "dist", "distance"):
         return JogCommand("reference")
+    if command in ("sync", "rebase", "hold"):
+        return JogCommand("sync")
     if command in JOG_DELTAS:
         return JogCommand("move", delta_axis=JOG_DELTAS[command])
     if len(command) > 1 and command[-1] in "+-":
@@ -487,7 +490,7 @@ def parse_jog_command(text: str) -> JogCommand:
     raise ValueError(
         "unknown command; use x+/x-/y+/y-/z+/z-, step <m>, dur <s>, "
         "pan+/pan-/lift+/lift-/elbow+/elbow-/wrist+/wrist-/roll+/roll-, "
-        "pose, sample, help, or q"
+        "pose, ref, sync, sample, help, or q"
     )
 
 
@@ -509,6 +512,7 @@ def format_jog_help(step_m: float, duration_s: float, joint_step_rad: float | No
         f"  dur <seconds>        change motion duration (current {duration_s:.2f} s)\n"
         "  pose                 print current tool pose and touch point\n"
         "  ref                  compare current point to accepted corner distances\n"
+        "  sync                 rebase joint hold command to current measured joints\n"
         "  sample / Enter       record this corner now\n"
         "  q                    abort without writing output"
     )
@@ -653,7 +657,9 @@ class JointJogSession:
             JointState, joint_states_topic, self._on_joint_state, sensor_qos
         )
         self.publisher = node.create_publisher(Float64MultiArray, command_topic, 10)
+        self._held_positions: np.ndarray | None = None
         self.wait_for_joint_state()
+        self.sync_to_measured(publish=False)
 
     def _on_joint_state(self, msg: JointState) -> None:
         for name, position in zip(msg.name, msg.position):
@@ -667,10 +673,28 @@ class JointJogSession:
             time.sleep(0.05)
         raise RuntimeError("no complete arm joint state received for joint jog")
 
-    def move(self, joint_name: str, sign: float, step_rad: float | None = None) -> None:
+    def _measured_positions(self) -> np.ndarray:
         self.wait_for_joint_state()
+        return np.array([self._latest_positions[name] for name in ARM_JOINTS], dtype=float)
+
+    def _publish(self, positions: np.ndarray) -> None:
+        msg = Float64MultiArray()
+        msg.data = [float(v) for v in positions]
+        self.publisher.publish(msg)
+
+    def sync_to_measured(self, *, publish: bool = True) -> str:
+        measured = self._measured_positions()
+        self._held_positions = measured.copy()
+        if publish:
+            self._publish(self._held_positions)
+        return "  joint hold synced to current measured positions"
+
+    def move(self, joint_name: str, sign: float, step_rad: float | None = None) -> None:
         step = self.joint_step_rad if step_rad is None else step_rad
-        q0 = np.array([self._latest_positions[name] for name in ARM_JOINTS], dtype=float)
+        measured_before = self._measured_positions()
+        if self._held_positions is None:
+            self._held_positions = measured_before.copy()
+        q0 = self._held_positions.copy()
         target = q0.copy()
         idx = ARM_JOINTS.index(joint_name)
         target[idx] += sign * step
@@ -680,20 +704,27 @@ class JointJogSession:
         for i in range(1, steps + 1):
             alpha = i / steps
             cmd = q0 + (target - q0) * alpha
-            msg = Float64MultiArray()
-            msg.data = [float(v) for v in cmd]
-            self.publisher.publish(msg)
+            self._publish(cmd)
             time.sleep(duration / steps)
+        self._held_positions = target.copy()
 
         time.sleep(0.15)
-        self.wait_for_joint_state()
-        q1 = np.array([self._latest_positions[name] for name in ARM_JOINTS], dtype=float)
-        observed = q1[idx] - q0[idx]
+        measured_after = self._measured_positions()
+        observed = measured_after[idx] - measured_before[idx]
         print(
             f"  commanded {joint_name}: "
             f"{math.degrees(sign * step): .1f} deg"
         )
         print(f"  observed {joint_name}:  {math.degrees(observed): .1f} deg")
+        drift = measured_after - measured_before
+        drift[idx] = 0.0
+        drift_items = [
+            f"{name} {math.degrees(value):+.1f} deg"
+            for name, value in zip(ARM_JOINTS, drift)
+            if abs(value) >= math.radians(0.5)
+        ]
+        if drift_items:
+            print(f"  uncommanded measured drift: {', '.join(drift_items)}")
         if abs(step) >= 0.05 and abs(observed) < max(0.005, 0.20 * abs(step)):
             print("  WARNING: joint barely moved; check torque/controller or increase jstep")
 
@@ -772,6 +803,13 @@ class JogSession:
                     if reference:
                         print(reference)
                     self._set_web_prompt(name, instruction, reference or "No accepted corners yet.")
+                elif command.kind == "sync":
+                    if self.joint_jog is None:
+                        text = "  joint jog is not enabled"
+                    else:
+                        text = self.joint_jog.sync_to_measured()
+                    print(text)
+                    self._set_web_prompt(name, instruction, text)
                 elif command.kind == "step":
                     assert command.value is not None
                     if command.value > self.max_step_m:
@@ -958,6 +996,9 @@ class JogSession:
                 "  WARNING: TF barely moved. The arm may not be executing commands, "
                 "or the step is below backlash/visibility."
             )
+        # Keep future direct joint jogs from snapping back to the pre-Cartesian hold.
+        if self.joint_jog is not None:
+            self.joint_jog.sync_to_measured(publish=False)
 
 
 def normalize(vec: np.ndarray, name: str) -> np.ndarray:

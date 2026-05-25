@@ -69,8 +69,8 @@ from tf_transformations import quaternion_matrix
 
 from robokin.placo import PlacoKinematics, PlacoConfig
 from robokin.robot_model import load_robot_description
-from robokin.motion_planner import MotionPlanner
-from robokin.trajectory_executor import TrajectoryExecutor
+from so101_kinematics.motion_planner import MotionPlanner
+from so101_kinematics.trajectory_executor import TrajectoryExecutor
 
 from so101_kinematics_msgs.srv import GoToPose, GoToJoints
 
