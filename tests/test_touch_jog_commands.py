@@ -46,6 +46,46 @@ def test_parse_jog_step_and_duration():
     assert duration.value == 2.5
 
 
+def test_parse_joint_jog_command():
+    module = load_module()
+
+    command = module.parse_jog_command("elbow-")
+
+    assert command.kind == "joint_move"
+    assert command.joint_name == "elbow_flex"
+    assert command.joint_sign == -1.0
+
+
+def test_parse_joint_step_command():
+    module = load_module()
+
+    command = module.parse_jog_command("jstep 0.04")
+
+    assert command.kind == "joint_step"
+    assert command.value == 0.04
+
+
+def test_parse_axis_command_with_explicit_distance():
+    module = load_module()
+
+    command = module.parse_jog_command("z+ 0.02")
+
+    assert command.kind == "move"
+    np.testing.assert_allclose(command.delta_axis, [0.0, 0.0, 1.0])
+    assert command.value == 0.02
+
+
+def test_parse_joint_command_with_explicit_step():
+    module = load_module()
+
+    command = module.parse_jog_command("roll+ 0.05")
+
+    assert command.kind == "joint_move"
+    assert command.joint_name == "wrist_roll"
+    assert command.joint_sign == 1.0
+    assert command.value == 0.05
+
+
 def test_parse_jog_rejects_bad_command():
     module = load_module()
 

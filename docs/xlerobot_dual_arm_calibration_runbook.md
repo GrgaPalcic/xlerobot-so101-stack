@@ -658,10 +658,14 @@ the latest `field_runs/*/run_state.yaml`. To use a finer first step, append
 `--jog-step-m 0.001`. To avoid the independent top-right check, append
 `--corner-layout tl_bl_br`.
 
-Jog prompt commands are `x+`, `x-`, `y+`, `y-`, `z+`, and `z-` in the arm base
-frame. Press Enter or type `sample` only when the tool is touching the requested
-corner. Use `step 0.001` or `step 0.005` to adjust the increment, `pose` to
-print the current TF pose, and `q` to abort without writing output.
+Jog prompt commands include Cartesian `x+`, `x-`, `y+`, `y-`, `z+`, and `z-`
+in the arm base frame. They also include direct joint nudges: `pan+/-`,
+`lift+/-`, `elbow+/-`, `wrist+/-`, and `roll+/-`. Use the joint nudges when
+the Cartesian IK response is visibly off. Press Enter or type `sample` only
+when the tool is touching the requested corner. Use `step 0.001` or
+`step 0.005` to adjust Cartesian increments, `jstep 0.02` to adjust joint
+increments in radians, `pose` to print the current TF pose, and `q` to abort
+without writing output.
 
 Do not force a stiff arm. If an arm fights you, a non-state-only launch or a
 previous failed process may still have torque enabled. Stop the launch/processes

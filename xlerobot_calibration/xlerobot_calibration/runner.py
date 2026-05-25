@@ -137,6 +137,8 @@ def build_touch_jog_commands(
     samples: int = 11,
     jog_step_m: float = 0.002,
     jog_duration_sec: float = 1.5,
+    jog_strategy: str = "cartesian",
+    joint_step_rad: float = 0.035,
 ) -> tuple[list[str], list[str], list[str]]:
     if side not in {"left", "right"}:
         raise StepError(f"side must be left or right, got {side!r}")
@@ -216,6 +218,14 @@ def build_touch_jog_commands(
         str(jog_step_m),
         "--jog-duration-sec",
         str(jog_duration_sec),
+        "--jog-strategy",
+        jog_strategy,
+        "--joint-jog-topic",
+        f"/{side}/arm_forward_controller/commands",
+        "--joint-states-topic",
+        f"/{side}/joint_states",
+        "--joint-step-rad",
+        str(joint_step_rad),
         "--output",
         str(touch_output),
     ]
@@ -231,6 +241,8 @@ def run_touch_jog(
     samples: int = 11,
     jog_step_m: float = 0.002,
     jog_duration_sec: float = 1.5,
+    jog_strategy: str = "cartesian",
+    joint_step_rad: float = 0.035,
     stop_existing: bool = True,
     dry_run: bool = False,
     yes: bool = False,
@@ -250,6 +262,8 @@ def run_touch_jog(
         samples=samples,
         jog_step_m=jog_step_m,
         jog_duration_sec=jog_duration_sec,
+        jog_strategy=jog_strategy,
+        joint_step_rad=joint_step_rad,
     )
 
     print("")

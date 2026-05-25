@@ -114,6 +114,10 @@ def test_touch_jog_commands_use_state_config(tmp_path: Path):
     assert "arm:=left" in motion
     assert "--jog-service" in recorder
     assert "/left/go_to_pose" in recorder
+    assert "--jog-strategy" in recorder
+    assert "cartesian" in recorder
+    assert "--joint-jog-topic" in recorder
+    assert "/left/arm_forward_controller/commands" in recorder
     assert str(Path(state["out_dir"]) / "touch/left_base_to_world_board.yaml") in recorder
 
 

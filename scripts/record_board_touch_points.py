@@ -17,8 +17,11 @@ import numpy as np
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from geometry_msgs.msg import PoseStamped
+from sensor_msgs.msg import JointState
+from std_msgs.msg import Float64MultiArray
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from so101_kinematics_msgs.srv import GoToPose
@@ -73,11 +76,36 @@ JOG_DELTAS = {
     "z-": np.array([0.0, 0.0, -1.0], dtype=float),
 }
 
+ARM_JOINTS = [
+    "shoulder_pan",
+    "shoulder_lift",
+    "elbow_flex",
+    "wrist_flex",
+    "wrist_roll",
+]
+
+JOINT_JOG_ALIASES = {
+    "pan": "shoulder_pan",
+    "j1": "shoulder_pan",
+    "lift": "shoulder_lift",
+    "shoulder": "shoulder_lift",
+    "j2": "shoulder_lift",
+    "elbow": "elbow_flex",
+    "j3": "elbow_flex",
+    "wrist": "wrist_flex",
+    "flex": "wrist_flex",
+    "j4": "wrist_flex",
+    "roll": "wrist_roll",
+    "j5": "wrist_roll",
+}
+
 
 @dataclass(frozen=True)
 class JogCommand:
     kind: str
     delta_axis: np.ndarray | None = None
+    joint_name: str | None = None
+    joint_sign: float | None = None
     value: float | None = None
 
 
@@ -230,34 +258,153 @@ def parse_jog_command(text: str) -> JogCommand:
         return JogCommand("pose")
     if command in JOG_DELTAS:
         return JogCommand("move", delta_axis=JOG_DELTAS[command])
+    if len(command) > 1 and command[-1] in "+-":
+        joint_key = command[:-1]
+        if joint_key in JOINT_JOG_ALIASES:
+            sign = 1.0 if command[-1] == "+" else -1.0
+            return JogCommand(
+                "joint_move",
+                joint_name=JOINT_JOG_ALIASES[joint_key],
+                joint_sign=sign,
+            )
 
     parts = command.split()
-    if len(parts) == 2 and parts[0] in ("step", "dur", "duration"):
+    if len(parts) == 2 and parts[0] in JOG_DELTAS:
+        try:
+            value = float(parts[1])
+        except ValueError as exc:
+            raise ValueError("axis jog expects a numeric distance in meters") from exc
+        if value <= 0.0:
+            raise ValueError("axis jog distance must be positive")
+        return JogCommand("move", delta_axis=JOG_DELTAS[parts[0]], value=value)
+    if len(parts) == 2 and len(parts[0]) > 1 and parts[0][-1] in "+-":
+        joint_key = parts[0][:-1]
+        if joint_key in JOINT_JOG_ALIASES:
+            try:
+                value = float(parts[1])
+            except ValueError as exc:
+                raise ValueError("joint jog expects a numeric distance in radians") from exc
+            if value <= 0.0:
+                raise ValueError("joint jog distance must be positive")
+            sign = 1.0 if parts[0][-1] == "+" else -1.0
+            return JogCommand(
+                "joint_move",
+                joint_name=JOINT_JOG_ALIASES[joint_key],
+                joint_sign=sign,
+                value=value,
+            )
+    if len(parts) == 2 and parts[0] in ("step", "dur", "duration", "jstep", "joint-step"):
         try:
             value = float(parts[1])
         except ValueError as exc:
             raise ValueError(f"{parts[0]} expects a number") from exc
         if value <= 0.0:
             raise ValueError(f"{parts[0]} must be positive")
-        kind = "duration" if parts[0] in ("dur", "duration") else "step"
+        if parts[0] in ("dur", "duration"):
+            kind = "duration"
+        elif parts[0] in ("jstep", "joint-step"):
+            kind = "joint_step"
+        else:
+            kind = "step"
         return JogCommand(kind, value=value)
 
     raise ValueError(
         "unknown command; use x+/x-/y+/y-/z+/z-, step <m>, dur <s>, "
+        "pan+/pan-/lift+/lift-/elbow+/elbow-/wrist+/wrist-/roll+/roll-, "
         "pose, sample, help, or q"
     )
 
 
-def format_jog_help(step_m: float, duration_s: float) -> str:
+def format_jog_help(step_m: float, duration_s: float, joint_step_rad: float | None) -> str:
+    joint_help = ""
+    if joint_step_rad is not None:
+        joint_help = (
+            "  pan+ pan- lift+ lift- elbow+ elbow- wrist+ wrist- roll+ roll-\n"
+            f"                       move one joint by {math.degrees(joint_step_rad):.1f} deg\n"
+            "  elbow- 0.05          move one joint by an explicit distance in radians\n"
+            f"  jstep <radians>      change joint step (current {joint_step_rad:.4f} rad)\n"
+        )
     return (
         "Jog commands:\n"
         f"  x+ x- y+ y- z+ z-   move {step_m * 1000.0:.1f} mm in the base frame\n"
+        "  z+ 0.01              move one axis by an explicit distance in meters\n"
+        f"{joint_help}"
         f"  step <meters>        change jog step (current {step_m:.4f} m)\n"
         f"  dur <seconds>        change motion duration (current {duration_s:.2f} s)\n"
         "  pose                 print current tool pose and touch point\n"
         "  sample / Enter       record this corner now\n"
         "  q                    abort without writing output"
     )
+
+
+class JointJogSession:
+    def __init__(
+        self,
+        *,
+        node: Node,
+        joint_states_topic: str,
+        command_topic: str,
+        joint_step_rad: float,
+        duration_s: float,
+        timeout_s: float,
+    ) -> None:
+        self.node = node
+        self.joint_step_rad = joint_step_rad
+        self.duration_s = duration_s
+        self.timeout_s = timeout_s
+        self._latest_positions: dict[str, float] = {}
+        sensor_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
+        self.node.create_subscription(
+            JointState, joint_states_topic, self._on_joint_state, sensor_qos
+        )
+        self.publisher = node.create_publisher(Float64MultiArray, command_topic, 10)
+        self.wait_for_joint_state()
+
+    def _on_joint_state(self, msg: JointState) -> None:
+        for name, position in zip(msg.name, msg.position):
+            self._latest_positions[name] = float(position)
+
+    def wait_for_joint_state(self) -> None:
+        deadline = time.monotonic() + self.timeout_s
+        while time.monotonic() < deadline:
+            if all(name in self._latest_positions for name in ARM_JOINTS):
+                return
+            time.sleep(0.05)
+        raise RuntimeError("no complete arm joint state received for joint jog")
+
+    def move(self, joint_name: str, sign: float, step_rad: float | None = None) -> None:
+        self.wait_for_joint_state()
+        step = self.joint_step_rad if step_rad is None else step_rad
+        q0 = np.array([self._latest_positions[name] for name in ARM_JOINTS], dtype=float)
+        target = q0.copy()
+        idx = ARM_JOINTS.index(joint_name)
+        target[idx] += sign * step
+
+        duration = max(0.05, self.duration_s)
+        steps = max(2, int(duration * 50.0))
+        for i in range(1, steps + 1):
+            alpha = i / steps
+            cmd = q0 + (target - q0) * alpha
+            msg = Float64MultiArray()
+            msg.data = [float(v) for v in cmd]
+            self.publisher.publish(msg)
+            time.sleep(duration / steps)
+
+        time.sleep(0.15)
+        self.wait_for_joint_state()
+        q1 = np.array([self._latest_positions[name] for name in ARM_JOINTS], dtype=float)
+        observed = q1[idx] - q0[idx]
+        print(
+            f"  commanded {joint_name}: "
+            f"{math.degrees(sign * step): .1f} deg"
+        )
+        print(f"  observed {joint_name}:  {math.degrees(observed): .1f} deg")
+        if abs(observed) < max(0.002, 0.25 * abs(step)):
+            print("  WARNING: joint barely moved; check torque/controller or increase jstep")
 
 
 class JogSession:
@@ -275,6 +422,7 @@ class JogSession:
         max_step_m: float,
         timeout_s: float,
         strategy: str,
+        joint_jog: JointJogSession | None = None,
     ) -> None:
         self.node = node
         self.tf_buffer = tf_buffer
@@ -286,13 +434,14 @@ class JogSession:
         self.max_step_m = max_step_m
         self.timeout_s = timeout_s
         self.strategy = strategy
+        self.joint_jog = joint_jog
         self.client = node.create_client(GoToPose, service_name)
         if not self.client.wait_for_service(timeout_sec=timeout_s):
             raise RuntimeError(f"jog service {service_name} is not available")
 
     def run_corner_prompt(self, name: str, instruction: str) -> None:
         print(f"[{name}] {instruction}")
-        print(format_jog_help(self.step_m, self.duration_s))
+        print(format_jog_help(self.step_m, self.duration_s, self._joint_step_rad()))
         while True:
             raw = input(f"{name} jog> ")
             try:
@@ -302,7 +451,7 @@ class JogSession:
                 if command.kind == "quit":
                     raise KeyboardInterrupt
                 if command.kind == "help":
-                    print(format_jog_help(self.step_m, self.duration_s))
+                    print(format_jog_help(self.step_m, self.duration_s, self._joint_step_rad()))
                 elif command.kind == "pose":
                     self.print_pose()
                 elif command.kind == "step":
@@ -319,13 +468,40 @@ class JogSession:
                     assert command.value is not None
                     self.duration_s = command.value
                     print(f"  duration set to {self.duration_s:.2f} s")
+                elif command.kind == "joint_step":
+                    if self.joint_jog is None:
+                        print("  joint jog is not enabled")
+                    else:
+                        assert command.value is not None
+                        self.joint_jog.joint_step_rad = command.value
+                        print(
+                            f"  joint step set to "
+                            f"{math.degrees(self.joint_jog.joint_step_rad):.1f} deg"
+                        )
+                elif command.kind == "joint_move":
+                    if self.joint_jog is None:
+                        print("  joint jog is not enabled")
+                    else:
+                        assert command.joint_name is not None
+                        assert command.joint_sign is not None
+                        self.joint_jog.move(
+                            command.joint_name,
+                            command.joint_sign,
+                            step_rad=command.value,
+                        )
                 elif command.kind == "move":
                     assert command.delta_axis is not None
-                    self.move(command.delta_axis * self.step_m)
+                    step_m = self.step_m if command.value is None else command.value
+                    self.move(command.delta_axis * step_m)
             except KeyboardInterrupt:
                 raise
             except Exception as exc:
                 print(f"  {exc}")
+
+    def _joint_step_rad(self) -> float | None:
+        if self.joint_jog is None:
+            return None
+        return self.joint_jog.joint_step_rad
 
     def print_pose(self) -> None:
         T = wait_for_tool_pose(
@@ -546,6 +722,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="joint_quintic",
         help="GoToPose planner strategy for each jog command.",
     )
+    parser.add_argument(
+        "--joint-jog-topic",
+        default="",
+        help="Optional Float64MultiArray arm command topic for direct joint jogs.",
+    )
+    parser.add_argument(
+        "--joint-states-topic",
+        default="",
+        help="JointState topic for direct joint jog feedback.",
+    )
+    parser.add_argument(
+        "--joint-step-rad",
+        type=float,
+        default=0.035,
+        help="Default direct joint jog step in radians.",
+    )
     return parser
 
 
@@ -563,6 +755,12 @@ def main() -> int:
     if args.jog_duration_sec <= 0.0:
         print("ERROR: --jog-duration-sec must be positive", file=sys.stderr)
         return 2
+    if args.joint_step_rad <= 0.0:
+        print("ERROR: --joint-step-rad must be positive", file=sys.stderr)
+        return 2
+    if bool(args.joint_jog_topic) != bool(args.joint_states_topic):
+        print("ERROR: --joint-jog-topic and --joint-states-topic must be used together", file=sys.stderr)
+        return 2
 
     width_m = args.cols * args.square_m
     height_m = args.rows * args.square_m
@@ -575,6 +773,17 @@ def main() -> int:
     executor.add_node(node)
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
+
+    joint_jog: JointJogSession | None = None
+    if args.joint_jog_topic:
+        joint_jog = JointJogSession(
+            node=node,
+            joint_states_topic=args.joint_states_topic,
+            command_topic=args.joint_jog_topic,
+            joint_step_rad=args.joint_step_rad,
+            duration_s=args.jog_duration_sec,
+            timeout_s=args.jog_timeout_s,
+        )
 
     jog_session: JogSession | None = None
     if args.jog_service:
@@ -590,6 +799,7 @@ def main() -> int:
             max_step_m=args.max_jog_step_m,
             timeout_s=args.jog_timeout_s,
             strategy=args.jog_strategy,
+            joint_jog=joint_jog,
         )
 
     print("")
