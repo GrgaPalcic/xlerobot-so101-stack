@@ -578,9 +578,14 @@ filtered calibration to the expected YAML names. If median or worst errors look
 high, inspect `caib_marker_board_calibration_summary.json` and the per-model
 `*_frame_diagnostics.csv` files before recapturing.
 
-Pick the YAML with the better median/worst view error. For the GoPro
-SuperView feed, `rational_polynomial` is often the better candidate. For the
-Arducams, `plumb_bob` may be good enough. Record the chosen files:
+Pick the YAML with the better median/worst view error. "Use" a model by
+recording that YAML in the run state with `calib set-config ..._info`; later
+extrinsics and camera-config generation read those paths. For the wrist
+Arducams, prefer `plumb_bob` unless `rational_polynomial` gives a clear
+reprojection-error improvement. A tiny residual improvement from the rational
+model is not worth unstable-looking high-order distortion coefficients. For the
+GoPro SuperView feed, `rational_polynomial` is often the better candidate.
+Record the chosen files:
 
 ```bash
 calib set-config left_wrist_info "$OUT/intrinsics/left_wrist_arducam_plumb_bob.yaml"
