@@ -1,4 +1,4 @@
 [submodule "feetech_ros2_driver"]
 	path = feetech_ros2_driver
-	url = https://github.com/legalaspro/feetech_ros2_driver.git
+	url = git@github.com:GrgaPalcic/feetech_ros2_driver.git
 	branch = feat/joint-config-and-calibration

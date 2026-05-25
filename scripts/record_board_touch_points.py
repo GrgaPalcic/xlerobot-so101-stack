@@ -168,6 +168,9 @@ WEB_UI_HTML = """<!doctype html>
       font-size: 16px;
     }
     .inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+    .profile { grid-template-columns: repeat(3, minmax(96px, 1fr)); }
+    .note { color: #a9b4c2; font-size: 13px; line-height: 1.35; margin: 8px 0; }
+    .profile-command { min-height: 44px; }
     pre {
       white-space: pre-wrap;
       min-height: 96px;
@@ -199,6 +202,22 @@ WEB_UI_HTML = """<!doctype html>
       <input id="jointStep" type="number" min="0.2" max="45" step="0.5" value="2">
     </div>
   </div>
+  <div class="inputs profile">
+    <div>
+      <label for="durationSec">Duration, sec</label>
+      <input id="durationSec" type="number" min="0.1" max="10" step="0.1" value="1.5" onchange="sendDuration()">
+    </div>
+    <div>
+      <label for="commandSpeed">Command speed</label>
+      <input id="commandSpeed" type="number" min="0" max="32767" step="100" value="2400" oninput="renderProfileCommand()">
+    </div>
+    <div>
+      <label for="commandAccel">Command accel</label>
+      <input id="commandAccel" type="number" min="0" max="255" step="5" value="50" oninput="renderProfileCommand()">
+    </div>
+  </div>
+  <div class="note">Motion duration updates live. Speed/accel are launch-time driver profile values; try speed 800-1800 and accel 15-45. Default is 2400/50.</div>
+  <pre id="profileCommand" class="profile-command"></pre>
 
   <h2>Cartesian</h2>
   <div class="grid">
@@ -251,16 +270,32 @@ function sendJoint(joint) {
   const deg = Number(document.getElementById('jointStep').value || 2);
   send(`${joint} ${deg * Math.PI / 180}`);
 }
+function sendDuration() {
+  const seconds = Number(document.getElementById('durationSec').value || 1.5);
+  send(`dur ${seconds}`);
+}
+function renderProfileCommand() {
+  const speed = Number(document.getElementById('commandSpeed').value || 2400);
+  const accel = Number(document.getElementById('commandAccel').value || 50);
+  const prefix = window.profileCommandPrefix || './scripts/xlerobot_touch_jog.sh left';
+  document.getElementById('profileCommand').textContent =
+    `${prefix} --command-speed ${speed} --command-acceleration ${accel}`;
+}
 async function refresh() {
   const res = await fetch('/api/state');
   const data = await res.json();
   document.getElementById('target').textContent = data.target || 'Waiting for recorder...';
   document.getElementById('instruction').textContent = data.instruction || '';
   document.getElementById('status').textContent = data.status || '';
+  window.profileCommandPrefix = data.profile_command || window.profileCommandPrefix;
   if (!stepInputsInitialized) {
     if (data.cart_step_m) document.getElementById('cartStep').value = (data.cart_step_m * 1000).toFixed(1);
     if (data.joint_step_rad) document.getElementById('jointStep').value = (data.joint_step_rad * 180 / Math.PI).toFixed(1);
+    if (data.duration_s) document.getElementById('durationSec').value = Number(data.duration_s).toFixed(1);
+    if (data.command_speed) document.getElementById('commandSpeed').value = data.command_speed;
+    if (data.command_acceleration) document.getElementById('commandAccel').value = data.command_acceleration;
     stepInputsInitialized = true;
+    renderProfileCommand();
   }
 }
 setInterval(refresh, 750);
@@ -519,7 +554,15 @@ def format_jog_help(step_m: float, duration_s: float, joint_step_rad: float | No
 
 
 class WebJogInterface:
-    def __init__(self, host: str, port: int) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        *,
+        command_speed: int,
+        command_acceleration: int,
+        profile_command: str,
+    ) -> None:
         self.host = host
         self.port = port
         self.command_queue: queue.Queue[str] = queue.Queue()
@@ -530,6 +573,10 @@ class WebJogInterface:
             "status": "Waiting for recorder...",
             "cart_step_m": 0.002,
             "joint_step_rad": 0.035,
+            "duration_s": 1.5,
+            "command_speed": command_speed,
+            "command_acceleration": command_acceleration,
+            "profile_command": profile_command,
         }
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -600,6 +647,7 @@ class WebJogInterface:
         status: str,
         cart_step_m: float,
         joint_step_rad: float | None,
+        duration_s: float,
     ) -> None:
         with self._lock:
             self._state.update(
@@ -609,6 +657,7 @@ class WebJogInterface:
                     "status": status,
                     "cart_step_m": cart_step_m,
                     "joint_step_rad": joint_step_rad,
+                    "duration_s": duration_s,
                 }
             )
 
@@ -892,6 +941,7 @@ class JogSession:
                 status=status,
                 cart_step_m=self.step_m,
                 joint_step_rad=self._joint_step_rad(),
+                duration_s=self.duration_s,
             )
 
     def _joint_step_rad(self) -> float | None:
@@ -1184,6 +1234,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="0.0.0.0",
         help="Host/interface for --jog-web-port.",
     )
+    parser.add_argument(
+        "--command-speed",
+        type=int,
+        default=2400,
+        help="Feetech command speed used by the active launch profile.",
+    )
+    parser.add_argument(
+        "--command-acceleration",
+        type=int,
+        default=50,
+        help="Feetech command acceleration used by the active launch profile.",
+    )
+    parser.add_argument(
+        "--profile-command",
+        default="",
+        help="Base command shown in the web UI for restarting with speed/accel flags.",
+    )
     return parser
 
 
@@ -1206,6 +1273,12 @@ def main() -> int:
         return 2
     if bool(args.joint_jog_topic) != bool(args.joint_states_topic):
         print("ERROR: --joint-jog-topic and --joint-states-topic must be used together", file=sys.stderr)
+        return 2
+    if args.command_speed < 0 or args.command_speed > 32767:
+        print("ERROR: --command-speed must be in [0, 32767]", file=sys.stderr)
+        return 2
+    if args.command_acceleration < 0 or args.command_acceleration > 255:
+        print("ERROR: --command-acceleration must be in [0, 255]", file=sys.stderr)
         return 2
 
     width_m = args.cols * args.square_m
@@ -1233,7 +1306,13 @@ def main() -> int:
 
     web: WebJogInterface | None = None
     if args.jog_web_port:
-        web = WebJogInterface(args.jog_web_host, args.jog_web_port)
+        web = WebJogInterface(
+            args.jog_web_host,
+            args.jog_web_port,
+            command_speed=args.command_speed,
+            command_acceleration=args.command_acceleration,
+            profile_command=args.profile_command,
+        )
         web.start()
 
     jog_session: JogSession | None = None

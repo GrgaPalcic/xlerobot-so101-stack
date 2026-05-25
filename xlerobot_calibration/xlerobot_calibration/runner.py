@@ -175,6 +175,8 @@ def build_touch_jog_commands(
     out = Path(state["out_dir"])
     controller_config = out / "config" / f"{side}_split_controllers.yaml"
     touch_output = out / "touch" / f"{side}_base_to_world_board.yaml"
+    effective_command_speed = 2400 if command_speed is None else command_speed
+    effective_command_acceleration = 50 if command_acceleration is None else command_acceleration
     joint_config = prepare_touch_jog_joint_config(
         state,
         side,
@@ -247,6 +249,12 @@ def build_touch_jog_commands(
         f"/{side}/joint_states",
         "--joint-step-rad",
         str(joint_step_rad),
+        "--command-speed",
+        str(effective_command_speed),
+        "--command-acceleration",
+        str(effective_command_acceleration),
+        "--profile-command",
+        f"./scripts/xlerobot_touch_jog.sh {side}",
         "--output",
         str(touch_output),
     ]
