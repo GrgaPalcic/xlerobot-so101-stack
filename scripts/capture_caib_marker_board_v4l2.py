@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import signal
 import sys
 import time
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 
 import cv2
 import cv2.aruco as aruco
@@ -102,6 +106,78 @@ def _draw(frame, kept, text):
     return display
 
 
+def _write_preview_html(output_dir: Path, camera_name: str) -> None:
+    (output_dir / "preview.html").write_text(
+        f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{camera_name} calibration preview</title>
+  <style>
+    body {{ margin: 0; font-family: system-ui, sans-serif; background: #111; color: #eee; }}
+    header {{ display: flex; gap: 12px; align-items: center; padding: 12px 16px; border-bottom: 1px solid #333; }}
+    button {{ padding: 7px 12px; border: 1px solid #777; border-radius: 4px; background: #222; color: #eee; cursor: pointer; }}
+    button:hover {{ background: #333; }}
+    img {{ display: block; width: 100vw; height: calc(100vh - 54px); object-fit: contain; background: #000; }}
+    #status {{ color: #bbb; }}
+  </style>
+</head>
+<body>
+  <header>
+    <strong>{camera_name}</strong>
+    <button id="capture">Capture now</button>
+    <span id="status">waiting for frames...</span>
+  </header>
+  <img id="preview" src="latest_detection.jpg" alt="latest detection preview">
+  <script>
+    const img = document.getElementById('preview');
+    const statusEl = document.getElementById('status');
+    async function refresh() {{
+      const t = Date.now();
+      img.src = 'latest_detection.jpg?t=' + t;
+      try {{
+        const response = await fetch('preview_status.json?t=' + t);
+        const data = await response.json();
+        statusEl.textContent = `${{data.captures}}/${{data.target_samples}} captures | ${{data.message}} | coverage ${{data.coverage_percent}}%`;
+      }} catch (_err) {{
+        statusEl.textContent = new Date().toLocaleTimeString();
+      }}
+    }}
+    document.getElementById('capture').addEventListener('click', async () => {{
+      await fetch('capture_now', {{cache: 'no-store'}});
+      statusEl.textContent = 'manual capture requested';
+    }});
+    setInterval(refresh, 250);
+    refresh();
+  </script>
+</body>
+</html>
+""",
+        encoding="utf-8",
+    )
+
+
+def _start_preview_server(output_dir: Path, port: int, capture_trigger: Path):
+    class PreviewHandler(SimpleHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.split("?", 1)[0] == "/capture_now":
+                capture_trigger.write_text(str(time.monotonic()), encoding="utf-8")
+                self.send_response(204)
+                self.end_headers()
+                return
+            super().do_GET()
+
+        def log_message(self, _format, *_args):
+            return
+
+    handler = partial(PreviewHandler, directory=str(output_dir))
+    server = ThreadingHTTPServer(("0.0.0.0", port), handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", default="/dev/video2")
@@ -120,6 +196,8 @@ def parse_args():
     parser.add_argument("--min-param-dist", type=float, default=0.11)
     parser.add_argument("--capture-cooldown-s", type=float, default=0.7)
     parser.add_argument("--auto-capture", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--preview-port", type=int, default=0, help="Serve preview.html on this port; 0 disables HTTP serving")
+    parser.add_argument("--preview-every-s", type=float, default=0.2, help="How often to refresh latest_detection.jpg")
     return parser.parse_args()
 
 
@@ -130,6 +208,13 @@ def main() -> int:
     overlays_dir = output_dir / "overlays"
     frames_dir.mkdir(parents=True, exist_ok=True)
     overlays_dir.mkdir(parents=True, exist_ok=True)
+    capture_trigger = output_dir / "capture_now.trigger"
+    capture_trigger.unlink(missing_ok=True)
+    _write_preview_html(output_dir, args.camera_name)
+    preview_server = None
+    if args.preview_port:
+        preview_server = _start_preview_server(output_dir, args.preview_port, capture_trigger)
+        print(f"Preview: http://0.0.0.0:{args.preview_port}/preview.html", flush=True)
 
     dictionary = _dictionary(args.aruco_dict)
     detector_params = _detector_params()
@@ -159,6 +244,7 @@ def main() -> int:
     captured_params = []
     last_capture = 0.0
     last_status = 0.0
+    last_preview = 0.0
     count = 0
     while not stop and count < args.target_samples:
         ok, frame = cap.read()
@@ -171,7 +257,9 @@ def main() -> int:
         now = time.monotonic()
         message = f"{len(kept)} markers"
         capture = False
+        capture_reason = ""
         params = None
+        manual_capture = capture_trigger.exists()
         if len(kept) >= args.min_markers and centers is not None:
             points = np.concatenate([pts for _marker_id, pts in kept], axis=0)
             params = _params_from_points(points, image_size)
@@ -187,10 +275,16 @@ def main() -> int:
                     and nearest >= args.min_param_dist
                     and now - last_capture >= args.capture_cooldown_s
                 )
+                capture_reason = "auto" if capture else ""
             prev_centers = {marker_id: center.copy() for marker_id, center in centers.items()}
+            if manual_capture and now - last_capture >= args.capture_cooldown_s:
+                capture = True
+                capture_reason = "manual"
         else:
             prev_centers = None
             message += f"; need {args.min_markers}"
+            if manual_capture:
+                message += "; manual pending"
 
         overlay = _draw(frame, kept, f"{count}/{args.target_samples} {message}")
         if capture and params is not None:
@@ -198,21 +292,43 @@ def main() -> int:
             captured_params.append(params)
             cv2.imwrite(str(frames_dir / f"capture_{count:03d}.jpg"), frame)
             cv2.imwrite(str(overlays_dir / f"capture_{count:03d}.jpg"), overlay)
+            capture_trigger.unlink(missing_ok=True)
             last_capture = now
             axes, overall = _progress(captured_params)
             print(
-                f"CAPTURE {count:03d}: markers={len(kept)} "
+                f"CAPTURE {count:03d} {capture_reason}: markers={len(kept)} "
                 f"coverage=x={axes[0]:.0%} y={axes[1]:.0%} size={axes[2]:.0%} skew={axes[3]:.0%} overall={overall:.0%}",
                 flush=True,
             )
 
+        if now - last_preview >= args.preview_every_s:
+            axes, overall = _progress(captured_params)
+            cv2.imwrite(str(output_dir / "latest_detection.jpg"), overlay, [cv2.IMWRITE_JPEG_QUALITY, 82])
+            cv2.imwrite(str(output_dir / "latest_frame.jpg"), frame, [cv2.IMWRITE_JPEG_QUALITY, 82])
+            (output_dir / "preview_status.json").write_text(
+                json.dumps(
+                    {
+                        "camera_name": args.camera_name,
+                        "captures": count,
+                        "target_samples": args.target_samples,
+                        "markers": len(kept),
+                        "message": message,
+                        "coverage_percent": round(overall * 100.0),
+                        "manual_capture_pending": capture_trigger.exists(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            last_preview = now
+
         if now - last_status > 1.0:
-            cv2.imwrite(str(output_dir / "latest_detection.jpg"), overlay)
             axes, overall = _progress(captured_params)
             print(f"status captures={count}/{args.target_samples} coverage={overall:.0%} {message}", flush=True)
             last_status = now
 
     cap.release()
+    if preview_server is not None:
+        preview_server.shutdown()
     print(f"Finished with {count} captures in {frames_dir}", flush=True)
     return 0 if count >= args.target_samples else 2
 
