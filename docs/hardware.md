@@ -145,6 +145,7 @@ Common parameters:
 - `range_min` / `range_max`: joint travel limits, written to the servo EEPROM
 - `p_coefficient` / `i_coefficient` / `d_coefficient`, `return_delay_time`, `max_torque_limit`, `protection_current`, `overload_torque`: optional tuning and protection settings written to the servo EEPROM
 - `acceleration`: optional motion parameter used by the driver and not part of LeRobot calibration output
+- `command_speed` / `command_acceleration`: optional runtime goal speed and acceleration sent with every position command. These tune motion profile smoothness without changing homing offsets or travel limits. Defaults are `2400` and `50`.
 
 For the follower gripper, this project sets these protection values by default in `so101_description/urdf/ros2_control/so101_ros2_control.xacro` to reduce the risk of overloading or damaging the motor:
 

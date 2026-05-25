@@ -2,6 +2,8 @@ from argparse import Namespace
 import json
 from pathlib import Path
 
+import yaml
+
 from xlerobot_calibration.board_presets import apply_board_preset, preset_names
 from xlerobot_calibration.cli import resolve_existing_state
 from xlerobot_calibration.report import write_report
@@ -123,6 +125,54 @@ def test_touch_jog_commands_use_state_config(tmp_path: Path):
     assert "--jog-web-port" in recorder
     assert "8780" in recorder
     assert str(Path(state["out_dir"]) / "touch/left_base_to_world_board.yaml") in recorder
+
+
+def test_touch_jog_tuning_writes_overlay_joint_config(tmp_path: Path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    cfg_dir = workspace / "so101_bringup/config/ros2_control"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "follower_split_controllers.yaml").write_text("follower:\n  controller_manager: {}\n")
+    payload = {
+        name: {
+            "id": idx,
+            "homing_offset": 0,
+            "range_min": 0,
+            "range_max": 4095,
+        }
+        for idx, name in enumerate(
+            ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"],
+            start=1,
+        )
+    }
+    left_json = tmp_path / "left.json"
+    right_json = tmp_path / "right.json"
+    left_json.write_text(json.dumps(payload))
+    right_json.write_text(json.dumps(payload))
+    state = create_state(workspace, run_id="20260517T000000Z")
+    state["config"]["left_port"] = "/dev/serial/by-path/left"
+    state["config"]["left_lerobot_json"] = str(left_json)
+    state["config"]["right_lerobot_json"] = str(right_json)
+    generate_controller_configs(state)
+    generate_joint_configs(state)
+    generate_world_files(state)
+
+    bringup, _, _ = build_touch_jog_commands(
+        state,
+        "left",
+        command_speed=900,
+        command_acceleration=20,
+        arm_protection_current=450,
+    )
+
+    overlay = Path(next(item.split(":=", 1)[1] for item in bringup if item.startswith("joint_config_file:=")))
+    assert overlay.name == "left_touch_jog_joints.yaml"
+    data = yaml.safe_load(overlay.read_text())
+    for name in ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll"]:
+        assert data["joints"][name]["command_speed"] == 900
+        assert data["joints"][name]["command_acceleration"] == 20
+        assert data["joints"][name]["protection_current"] == 450
+    assert "command_speed" not in data["joints"]["gripper"]
 
 
 def test_workspace_argument_overrides_stale_run_state_workspace(tmp_path: Path):

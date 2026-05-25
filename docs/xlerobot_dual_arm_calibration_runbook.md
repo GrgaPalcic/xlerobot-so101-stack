@@ -659,6 +659,21 @@ the latest `field_runs/*/run_state.yaml`. To use a finer first step, append
 use smaller steps near contact. To avoid the independent top-right check,
 append `--corner-layout tl_bl_br`.
 
+For smoother touch-jog motion, tune the runtime Feetech command profile instead
+of editing the LeRobot calibration values. The wrapper can generate a temporary
+per-run joint YAML for the jog launch:
+
+```bash
+./scripts/xlerobot_touch_jog.sh left --command-speed 1200 --command-acceleration 25
+```
+
+`command_speed` and `command_acceleration` are sent with each position command;
+they do not change homing offsets or joint limits. Lower values are usually
+smoother but slower. Arm torque/current protection can also be overridden for a
+touch-jog launch with `--arm-max-torque-limit`, `--arm-protection-current`, and
+`--arm-overload-torque`, but those values are written to servo registers at
+launch and should be changed deliberately.
+
 The touch recorder also starts a simple button UI at
 `http://192.168.1.73:8780/`. Use that page for jog, reference, pose, sample,
 and quit controls instead of typing commands. If the port is already occupied,

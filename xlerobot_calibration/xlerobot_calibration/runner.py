@@ -22,6 +22,9 @@ class StepError(RuntimeError):
     pass
 
 
+ARM_JOINTS = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")
+
+
 def render(text: str, state: dict[str, Any]) -> str:
     return text.format_map(context(state))
 
@@ -140,6 +143,11 @@ def build_touch_jog_commands(
     jog_duration_sec: float = 1.5,
     jog_strategy: str = "cartesian",
     joint_step_rad: float = 0.035,
+    command_speed: int | None = None,
+    command_acceleration: int | None = None,
+    arm_max_torque_limit: int | None = None,
+    arm_protection_current: int | None = None,
+    arm_overload_torque: int | None = None,
     web_port: int = 8780,
 ) -> tuple[list[str], list[str], list[str]]:
     if side not in {"left", "right"}:
@@ -167,6 +175,15 @@ def build_touch_jog_commands(
     out = Path(state["out_dir"])
     controller_config = out / "config" / f"{side}_split_controllers.yaml"
     touch_output = out / "touch" / f"{side}_base_to_world_board.yaml"
+    joint_config = prepare_touch_jog_joint_config(
+        state,
+        side,
+        command_speed=command_speed,
+        command_acceleration=command_acceleration,
+        arm_max_torque_limit=arm_max_torque_limit,
+        arm_protection_current=arm_protection_current,
+        arm_overload_torque=arm_overload_torque,
+    )
 
     bringup_cmd = [
         "ros2",
@@ -177,7 +194,7 @@ def build_touch_jog_commands(
         f"frame_prefix:={side}/",
         "hardware_type:=real",
         f"usb_port:={cfg[f'{side}_port']}",
-        f"joint_config_file:={cfg[f'{side}_joint_config']}",
+        f"joint_config_file:={joint_config}",
         f"controller_config_file:={controller_config}",
         "arm_controller:=arm_forward_controller",
         "use_rviz:=false",
@@ -238,6 +255,57 @@ def build_touch_jog_commands(
     return bringup_cmd, motion_cmd, recorder_cmd
 
 
+def prepare_touch_jog_joint_config(
+    state: dict[str, Any],
+    side: str,
+    *,
+    command_speed: int | None = None,
+    command_acceleration: int | None = None,
+    arm_max_torque_limit: int | None = None,
+    arm_protection_current: int | None = None,
+    arm_overload_torque: int | None = None,
+) -> str:
+    validate_optional_range("command_speed", command_speed, 0, 32767)
+    validate_optional_range("command_acceleration", command_acceleration, 0, 255)
+    validate_optional_range("arm_max_torque_limit", arm_max_torque_limit, 0, 4095)
+    validate_optional_range("arm_protection_current", arm_protection_current, 0, 4095)
+    validate_optional_range("arm_overload_torque", arm_overload_torque, 0, 255)
+    base_path = Path(str(state["config"][f"{side}_joint_config"]))
+    overrides = {
+        "command_speed": command_speed,
+        "command_acceleration": command_acceleration,
+        "max_torque_limit": arm_max_torque_limit,
+        "protection_current": arm_protection_current,
+        "overload_torque": arm_overload_torque,
+    }
+    if all(value is None for value in overrides.values()):
+        return str(base_path)
+
+    data = yaml.safe_load(base_path.read_text(encoding="utf-8"))
+    joints = data.get("joints")
+    if not isinstance(joints, dict):
+        raise StepError(f"{base_path} has no top-level joints map")
+
+    for name in ARM_JOINTS:
+        if name not in joints:
+            raise StepError(f"{base_path} is missing arm joint {name}")
+        row = joints[name]
+        for key, value in overrides.items():
+            if value is not None:
+                row[key] = int(value)
+
+    target = Path(state["out_dir"]) / "config" / f"{side}_touch_jog_joints.yaml"
+    target.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    return str(target)
+
+
+def validate_optional_range(name: str, value: int | None, minimum: int, maximum: int) -> None:
+    if value is None:
+        return
+    if value < minimum or value > maximum:
+        raise StepError(f"{name} must be in [{minimum}, {maximum}], got {value}")
+
+
 def run_touch_jog(
     state: dict[str, Any],
     side: str,
@@ -250,6 +318,11 @@ def run_touch_jog(
     jog_duration_sec: float = 1.5,
     jog_strategy: str = "cartesian",
     joint_step_rad: float = 0.035,
+    command_speed: int | None = None,
+    command_acceleration: int | None = None,
+    arm_max_torque_limit: int | None = None,
+    arm_protection_current: int | None = None,
+    arm_overload_torque: int | None = None,
     web_port: int = 8780,
     stop_existing: bool = True,
     dry_run: bool = False,
@@ -261,6 +334,11 @@ def run_touch_jog(
         raise StepError("missing prerequisite for touch-jog: generate_controller_configs")
     if step_status(state, "generate_joint_configs") != "complete":
         raise StepError("missing prerequisite for touch-jog: generate_joint_configs")
+    validate_optional_range("command_speed", command_speed, 0, 32767)
+    validate_optional_range("command_acceleration", command_acceleration, 0, 255)
+    validate_optional_range("arm_max_torque_limit", arm_max_torque_limit, 0, 4095)
+    validate_optional_range("arm_protection_current", arm_protection_current, 0, 4095)
+    validate_optional_range("arm_overload_torque", arm_overload_torque, 0, 255)
 
     bringup_cmd, motion_cmd, recorder_cmd = build_touch_jog_commands(
         state,
@@ -273,6 +351,11 @@ def run_touch_jog(
         jog_duration_sec=jog_duration_sec,
         jog_strategy=jog_strategy,
         joint_step_rad=joint_step_rad,
+        command_speed=command_speed,
+        command_acceleration=command_acceleration,
+        arm_max_torque_limit=arm_max_torque_limit,
+        arm_protection_current=arm_protection_current,
+        arm_overload_torque=arm_overload_torque,
         web_port=web_port,
     )
 
@@ -280,6 +363,20 @@ def run_touch_jog(
     print(f"# Touch jog: {side}")
     print("This starts a real command controller and sends small jog moves.")
     print("Any existing same-side state-only/jog launch will be stopped first.")
+    tuning_values = {
+        "command_speed": command_speed,
+        "command_acceleration": command_acceleration,
+        "arm_max_torque_limit": arm_max_torque_limit,
+        "arm_protection_current": arm_protection_current,
+        "arm_overload_torque": arm_overload_torque,
+    }
+    enabled_tuning = {key: value for key, value in tuning_values.items() if value is not None}
+    if enabled_tuning:
+        print("Touch-jog motor tuning overrides:")
+        for key, value in enabled_tuning.items():
+            print(f"  {key}: {value}")
+        if any(key.startswith("arm_") for key in enabled_tuning):
+            print("  Note: arm torque/current overrides are written to servo registers at launch.")
     print("")
     print("Commands that will run:")
     print(shell_join(bringup_cmd))

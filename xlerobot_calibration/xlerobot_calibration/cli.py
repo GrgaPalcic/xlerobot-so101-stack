@@ -52,6 +52,16 @@ def build_parser() -> argparse.ArgumentParser:
     touch_jog.add_argument("--jog-duration-sec", type=float, default=1.5)
     touch_jog.add_argument("--jog-strategy", choices=("cartesian", "joint_quintic"), default="cartesian")
     touch_jog.add_argument("--joint-step-rad", type=float, default=0.035)
+    touch_jog.add_argument("--command-speed", type=int, default=None, help="Optional Feetech goal speed for touch jog")
+    touch_jog.add_argument(
+        "--command-acceleration",
+        type=int,
+        default=None,
+        help="Optional Feetech goal acceleration for touch jog, 0..255",
+    )
+    touch_jog.add_argument("--arm-max-torque-limit", type=int, default=None)
+    touch_jog.add_argument("--arm-protection-current", type=int, default=None)
+    touch_jog.add_argument("--arm-overload-torque", type=int, default=None)
     touch_jog.add_argument("--web-port", type=int, default=8780, help="Browser UI port. Use 0 to disable.")
     touch_jog.add_argument("--no-stop-existing", action="store_true", help="Do not stop existing same-side ROS control processes")
     touch_jog.add_argument("--dry-run", action="store_true")
@@ -143,6 +153,11 @@ def main(argv: list[str] | None = None) -> int:
                 jog_duration_sec=args.jog_duration_sec,
                 jog_strategy=args.jog_strategy,
                 joint_step_rad=args.joint_step_rad,
+                command_speed=args.command_speed,
+                command_acceleration=args.command_acceleration,
+                arm_max_torque_limit=args.arm_max_torque_limit,
+                arm_protection_current=args.arm_protection_current,
+                arm_overload_torque=args.arm_overload_torque,
                 web_port=args.web_port,
                 stop_existing=not args.no_stop_existing,
                 dry_run=args.dry_run,
