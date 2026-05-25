@@ -233,6 +233,7 @@ WEB_UI_HTML = """<!doctype html>
   </div>
 </main>
 <script>
+let stepInputsInitialized = false;
 async function send(command) {
   await fetch('/api/command', {
     method: 'POST',
@@ -255,8 +256,11 @@ async function refresh() {
   document.getElementById('target').textContent = data.target || 'Waiting for recorder...';
   document.getElementById('instruction').textContent = data.instruction || '';
   document.getElementById('status').textContent = data.status || '';
-  if (data.cart_step_m) document.getElementById('cartStep').value = (data.cart_step_m * 1000).toFixed(1);
-  if (data.joint_step_rad) document.getElementById('jointStep').value = (data.joint_step_rad * 180 / Math.PI).toFixed(1);
+  if (!stepInputsInitialized) {
+    if (data.cart_step_m) document.getElementById('cartStep').value = (data.cart_step_m * 1000).toFixed(1);
+    if (data.joint_step_rad) document.getElementById('jointStep').value = (data.joint_step_rad * 180 / Math.PI).toFixed(1);
+    stepInputsInitialized = true;
+  }
 }
 setInterval(refresh, 750);
 refresh();
