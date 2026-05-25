@@ -111,6 +111,11 @@ class CartesianMotionNode(Node):
         )
         self.joint_names = self.solver.joint_names
         self.gripper_index = self.joint_names.index("gripper")
+        self.declare_parameter("command_joint_names", list(self.joint_names))
+        self.command_joint_names = self._get_command_joint_names()
+        self.command_joint_indices = [
+            self.joint_names.index(name) for name in self.command_joint_names
+        ]
         self.planner = MotionPlanner(self.solver)
         self.traj_executor = TrajectoryExecutor()
 
@@ -167,10 +172,24 @@ class CartesianMotionNode(Node):
 
         self.get_logger().info(
             f"cartesian_motion_node up — service /go_to_pose, "
-            f"cmd_topic={self.get_parameter('cmd_topic').value}"
+            f"cmd_topic={self.get_parameter('cmd_topic').value}, "
+            f"command_joint_names={self.command_joint_names}"
         )
 
     # ── callbacks ──
+
+    def _get_command_joint_names(self) -> list[str]:
+        value = self.get_parameter("command_joint_names").value
+        names = [str(name) for name in value] if value else list(self.joint_names)
+        unknown = [name for name in names if name not in self.joint_names]
+        if unknown:
+            raise ValueError(
+                f"command_joint_names contains unknown joints {unknown}; "
+                f"known joints: {self.joint_names}"
+            )
+        if not names:
+            raise ValueError("command_joint_names cannot be empty")
+        return names
 
     def _on_joints(self, msg: JointState):
         name_to_pos = dict(zip(msg.name, msg.position))
@@ -313,6 +332,15 @@ class CartesianMotionNode(Node):
             )
             return response
 
+        not_commandable = [n for n in names if n not in self.command_joint_names]
+        if not_commandable:
+            response.success = False
+            response.message = (
+                f"Requested joints {not_commandable} are not in "
+                f"command_joint_names {self.command_joint_names}"
+            )
+            return response
+
         # Any joint not listed keeps its measured value. This lets callers
         # move a subset (e.g. leave the gripper alone).
         q_goal = self._q_measured.copy()
@@ -370,7 +398,7 @@ class CartesianMotionNode(Node):
 
     def _publish(self, q_cmd: np.ndarray):
         msg = Float64MultiArray()
-        msg.data = [float(v) for v in q_cmd]
+        msg.data = [float(q_cmd[i]) for i in self.command_joint_indices]
         self.cmd_pub.publish(msg)
 
 

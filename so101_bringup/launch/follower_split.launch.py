@@ -11,6 +11,7 @@ def generate_launch_description():
 
     # --- Launch arguments ---
     namespace = LaunchConfiguration("namespace")
+    frame_prefix = LaunchConfiguration("frame_prefix")
     hardware_type = LaunchConfiguration("hardware_type")
     usb_port = LaunchConfiguration("usb_port")
     joint_config_file = LaunchConfiguration("joint_config_file")
@@ -67,7 +68,7 @@ def generate_launch_description():
         package="robot_state_publisher",
         executable="robot_state_publisher",
         namespace=namespace,
-        parameters=[{"robot_description": robot_description}],
+        parameters=[{"robot_description": robot_description, "frame_prefix": frame_prefix}],
         output="screen",
     )
 
@@ -114,6 +115,7 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("namespace", default_value="follower"),
+            DeclareLaunchArgument("frame_prefix", default_value="follower/"),
             DeclareLaunchArgument("hardware_type", default_value="real"),  # real | mock
             DeclareLaunchArgument("usb_port", default_value="/dev/so101_follower"),
             DeclareLaunchArgument(

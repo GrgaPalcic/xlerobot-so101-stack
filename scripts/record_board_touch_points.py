@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import math
 import os
 import sys
@@ -17,7 +18,10 @@ import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from rclpy.time import Time
+from geometry_msgs.msg import PoseStamped
 from tf2_ros import Buffer, TransformException, TransformListener
+
+from so101_kinematics_msgs.srv import GoToPose
 
 try:
     import yaml
@@ -59,6 +63,22 @@ POINT_LAYOUTS = {
         ),
     ),
 }
+
+JOG_DELTAS = {
+    "x+": np.array([1.0, 0.0, 0.0], dtype=float),
+    "x-": np.array([-1.0, 0.0, 0.0], dtype=float),
+    "y+": np.array([0.0, 1.0, 0.0], dtype=float),
+    "y-": np.array([0.0, -1.0, 0.0], dtype=float),
+    "z+": np.array([0.0, 0.0, 1.0], dtype=float),
+    "z-": np.array([0.0, 0.0, -1.0], dtype=float),
+}
+
+
+@dataclass(frozen=True)
+class JogCommand:
+    kind: str
+    delta_axis: np.ndarray | None = None
+    value: float | None = None
 
 
 def parse_xyz(text: str) -> np.ndarray:
@@ -130,11 +150,25 @@ def matrix_to_quat_xyzw(rot: np.ndarray) -> list[float]:
     return [float(v) for v in quat]
 
 
-def wait_for_tool_point(
+def pose_stamped_from_matrix(T: np.ndarray, frame_id: str, node: Node) -> PoseStamped:
+    msg = PoseStamped()
+    msg.header.stamp = node.get_clock().now().to_msg()
+    msg.header.frame_id = frame_id
+    msg.pose.position.x = float(T[0, 3])
+    msg.pose.position.y = float(T[1, 3])
+    msg.pose.position.z = float(T[2, 3])
+    qx, qy, qz, qw = matrix_to_quat_xyzw(T[:3, :3])
+    msg.pose.orientation.x = qx
+    msg.pose.orientation.y = qy
+    msg.pose.orientation.z = qz
+    msg.pose.orientation.w = qw
+    return msg
+
+
+def wait_for_tool_pose(
     tf_buffer: Buffer,
     base_frame: str,
     tool_frame: str,
-    tool_offset: np.ndarray,
     timeout_s: float,
 ) -> np.ndarray:
     deadline = time.monotonic() + timeout_s
@@ -144,14 +178,27 @@ def wait_for_tool_point(
             tf = tf_buffer.lookup_transform(base_frame, tool_frame, Time())
             t = tf.transform.translation
             q = tf.transform.rotation
-            rot = quat_to_matrix(q.x, q.y, q.z, q.w)
-            return np.array([t.x, t.y, t.z], dtype=float) + rot @ tool_offset
+            T = np.eye(4, dtype=float)
+            T[:3, :3] = quat_to_matrix(q.x, q.y, q.z, q.w)
+            T[:3, 3] = np.array([t.x, t.y, t.z], dtype=float)
+            return T
         except (TransformException, ValueError) as exc:
             last_error = exc
             time.sleep(0.05)
     raise RuntimeError(
         f"no TF {base_frame} <- {tool_frame} after {timeout_s:.1f}s: {last_error}"
     )
+
+
+def wait_for_tool_point(
+    tf_buffer: Buffer,
+    base_frame: str,
+    tool_frame: str,
+    tool_offset: np.ndarray,
+    timeout_s: float,
+) -> np.ndarray:
+    T = wait_for_tool_pose(tf_buffer, base_frame, tool_frame, timeout_s)
+    return T[:3, 3] + T[:3, :3] @ tool_offset
 
 
 def sample_tool_point(
@@ -169,6 +216,160 @@ def sample_tool_point(
         time.sleep(sample_period_s)
     arr = np.vstack(pts)
     return np.mean(arr, axis=0), np.std(arr, axis=0)
+
+
+def parse_jog_command(text: str) -> JogCommand:
+    command = text.strip().lower()
+    if command in ("", "s", "sample", "record"):
+        return JogCommand("sample")
+    if command in ("q", "quit", "exit"):
+        return JogCommand("quit")
+    if command in ("h", "help", "?"):
+        return JogCommand("help")
+    if command == "pose":
+        return JogCommand("pose")
+    if command in JOG_DELTAS:
+        return JogCommand("move", delta_axis=JOG_DELTAS[command])
+
+    parts = command.split()
+    if len(parts) == 2 and parts[0] in ("step", "dur", "duration"):
+        try:
+            value = float(parts[1])
+        except ValueError as exc:
+            raise ValueError(f"{parts[0]} expects a number") from exc
+        if value <= 0.0:
+            raise ValueError(f"{parts[0]} must be positive")
+        kind = "duration" if parts[0] in ("dur", "duration") else "step"
+        return JogCommand(kind, value=value)
+
+    raise ValueError(
+        "unknown command; use x+/x-/y+/y-/z+/z-, step <m>, dur <s>, "
+        "pose, sample, help, or q"
+    )
+
+
+def format_jog_help(step_m: float, duration_s: float) -> str:
+    return (
+        "Jog commands:\n"
+        f"  x+ x- y+ y- z+ z-   move {step_m * 1000.0:.1f} mm in the base frame\n"
+        f"  step <meters>        change jog step (current {step_m:.4f} m)\n"
+        f"  dur <seconds>        change motion duration (current {duration_s:.2f} s)\n"
+        "  pose                 print current tool pose and touch point\n"
+        "  sample / Enter       record this corner now\n"
+        "  q                    abort without writing output"
+    )
+
+
+class JogSession:
+    def __init__(
+        self,
+        *,
+        node: Node,
+        tf_buffer: Buffer,
+        base_frame: str,
+        tool_frame: str,
+        tool_offset: np.ndarray,
+        service_name: str,
+        step_m: float,
+        duration_s: float,
+        max_step_m: float,
+        timeout_s: float,
+        strategy: str,
+    ) -> None:
+        self.node = node
+        self.tf_buffer = tf_buffer
+        self.base_frame = base_frame
+        self.tool_frame = tool_frame
+        self.tool_offset = tool_offset
+        self.step_m = step_m
+        self.duration_s = duration_s
+        self.max_step_m = max_step_m
+        self.timeout_s = timeout_s
+        self.strategy = strategy
+        self.client = node.create_client(GoToPose, service_name)
+        if not self.client.wait_for_service(timeout_sec=timeout_s):
+            raise RuntimeError(f"jog service {service_name} is not available")
+
+    def run_corner_prompt(self, name: str, instruction: str) -> None:
+        print(f"[{name}] {instruction}")
+        print(format_jog_help(self.step_m, self.duration_s))
+        while True:
+            raw = input(f"{name} jog> ")
+            try:
+                command = parse_jog_command(raw)
+                if command.kind == "sample":
+                    return
+                if command.kind == "quit":
+                    raise KeyboardInterrupt
+                if command.kind == "help":
+                    print(format_jog_help(self.step_m, self.duration_s))
+                elif command.kind == "pose":
+                    self.print_pose()
+                elif command.kind == "step":
+                    assert command.value is not None
+                    if command.value > self.max_step_m:
+                        print(
+                            f"  rejected: max jog step is "
+                            f"{self.max_step_m * 1000.0:.1f} mm"
+                        )
+                    else:
+                        self.step_m = command.value
+                        print(f"  step set to {self.step_m * 1000.0:.1f} mm")
+                elif command.kind == "duration":
+                    assert command.value is not None
+                    self.duration_s = command.value
+                    print(f"  duration set to {self.duration_s:.2f} s")
+                elif command.kind == "move":
+                    assert command.delta_axis is not None
+                    self.move(command.delta_axis * self.step_m)
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:
+                print(f"  {exc}")
+
+    def print_pose(self) -> None:
+        T = wait_for_tool_pose(
+            self.tf_buffer, self.base_frame, self.tool_frame, self.timeout_s
+        )
+        point = T[:3, 3] + T[:3, :3] @ self.tool_offset
+        quat = matrix_to_quat_xyzw(T[:3, :3])
+        print(
+            f"  {self.tool_frame} origin xyz: "
+            f"{T[0, 3]: .4f} {T[1, 3]: .4f} {T[2, 3]: .4f} m"
+        )
+        print(
+            f"  touch point xyz:        "
+            f"{point[0]: .4f} {point[1]: .4f} {point[2]: .4f} m"
+        )
+        print(f"  tool quaternion xyzw:   {[round(v, 6) for v in quat]}")
+
+    def move(self, delta_xyz: np.ndarray) -> None:
+        T = wait_for_tool_pose(
+            self.tf_buffer, self.base_frame, self.tool_frame, self.timeout_s
+        )
+        T[:3, 3] += delta_xyz
+
+        request = GoToPose.Request()
+        request.target = pose_stamped_from_matrix(T, self.base_frame, self.node)
+        request.strategy = self.strategy
+        request.duration = self.duration_s
+        future = self.client.call_async(request)
+        deadline = time.monotonic() + self.duration_s + self.timeout_s
+        while not future.done() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if not future.done():
+            raise RuntimeError("jog service timed out")
+        response = future.result()
+        if response is None:
+            raise RuntimeError("jog service returned no response")
+        if not response.success:
+            raise RuntimeError(f"jog failed: {response.message}")
+        print(
+            f"  moved delta xyz: "
+            f"{delta_xyz[0] * 1000.0: .1f} "
+            f"{delta_xyz[1] * 1000.0: .1f} "
+            f"{delta_xyz[2] * 1000.0: .1f} mm"
+        )
 
 
 def normalize(vec: np.ndarray, name: str) -> np.ndarray:
@@ -292,11 +493,59 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--output",
         default="/home/dell/Documents/so101-ros-physical-ai/so101_bringup/config/cameras/extrinsics/board_in_base_touch.yaml",
     )
+    parser.add_argument(
+        "--jog-service",
+        default="",
+        help="Optional GoToPose service for terminal x/y/z jogs, e.g. /left/go_to_pose.",
+    )
+    parser.add_argument(
+        "--jog-step-m",
+        type=float,
+        default=0.002,
+        help="Default jog step in meters when --jog-service is enabled.",
+    )
+    parser.add_argument(
+        "--max-jog-step-m",
+        type=float,
+        default=0.02,
+        help="Largest allowed per-command jog step in meters.",
+    )
+    parser.add_argument(
+        "--jog-duration-sec",
+        type=float,
+        default=1.5,
+        help="Duration for each jog motion.",
+    )
+    parser.add_argument(
+        "--jog-timeout-s",
+        type=float,
+        default=8.0,
+        help="Service wait/response timeout for jog moves.",
+    )
+    parser.add_argument(
+        "--jog-strategy",
+        choices=("joint_quintic", "cartesian"),
+        default="joint_quintic",
+        help="GoToPose planner strategy for each jog command.",
+    )
     return parser
 
 
 def main() -> int:
     args = build_arg_parser().parse_args()
+    if args.jog_step_m <= 0.0:
+        print("ERROR: --jog-step-m must be positive", file=sys.stderr)
+        return 2
+    if args.max_jog_step_m <= 0.0:
+        print("ERROR: --max-jog-step-m must be positive", file=sys.stderr)
+        return 2
+    if args.jog_step_m > args.max_jog_step_m:
+        print("ERROR: --jog-step-m cannot exceed --max-jog-step-m", file=sys.stderr)
+        return 2
+    if args.jog_duration_sec <= 0.0:
+        print("ERROR: --jog-duration-sec must be positive", file=sys.stderr)
+        return 2
+
     width_m = args.cols * args.square_m
     height_m = args.rows * args.square_m
 
@@ -309,6 +558,22 @@ def main() -> int:
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
 
+    jog_session: JogSession | None = None
+    if args.jog_service:
+        jog_session = JogSession(
+            node=node,
+            tf_buffer=tf_buffer,
+            base_frame=args.base_frame,
+            tool_frame=args.tool_frame,
+            tool_offset=args.tool_offset,
+            service_name=args.jog_service,
+            step_m=args.jog_step_m,
+            duration_s=args.jog_duration_sec,
+            max_step_m=args.max_jog_step_m,
+            timeout_s=args.jog_timeout_s,
+            strategy=args.jog_strategy,
+        )
+
     print("")
     print("SO101 board touch recorder")
     print(f"TF: {args.base_frame} <- {args.tool_frame}")
@@ -317,7 +582,11 @@ def main() -> int:
     print("")
     print("Use the OUTER checkerboard-pattern corners, not the A3 paper corners.")
     print("Keep the same physical touch point on the gripper for every sample.")
-    print("Place the tool, hold it still, then press Enter in this terminal.")
+    if jog_session is None:
+        print("Place the tool, hold it still, then press Enter in this terminal.")
+    else:
+        print("JOG MODE ENABLED: this terminal sends real arm motion through GoToPose.")
+        print("Use one small jog command at a time, then press Enter/sample to record.")
     print("")
 
     points: dict[str, np.ndarray] = {}
@@ -326,8 +595,11 @@ def main() -> int:
         wait_for_tool_point(tf_buffer, args.base_frame, args.tool_frame, args.tool_offset, args.timeout_s)
         for name, instruction in POINT_LAYOUTS[args.corner_layout]:
             while True:
-                print(f"[{name}] {instruction}")
-                input("Press Enter when the tool is touching that point...")
+                if jog_session is None:
+                    print(f"[{name}] {instruction}")
+                    input("Press Enter when the tool is touching that point...")
+                else:
+                    jog_session.run_corner_prompt(name, instruction)
                 point, spread = sample_tool_point(
                     tf_buffer=tf_buffer,
                     base_frame=args.base_frame,

@@ -624,20 +624,85 @@ If both arms can reach all four corners, use `tl_tr_bl_br`. If a corner is not
 reachable, use `tl_bl_br`. The smaller world target is meant to make all four
 corners reachable.
 
-Terminal with both state-only launches already running. These manual steps
-print commands with the current world-board preset expanded from run state:
+For easy-to-move arms, keep both state-only launches running. These manual
+steps print commands with the current world-board preset expanded from run
+state:
 
 ```bash
 calib run-step touch_left_base
 calib run-step touch_right_base
 ```
 
-No leader arms or teleop are used for these steps. The state-only launches use
-the follower URDF geometry with state interfaces only, so they read servo
-positions and publish TF while leaving the arms hand-movable. Move the arm by
-hand so the same physical point on the gripper touches each requested outer
-checkerboard-pattern corner, hold it still, then press Enter in the recorder
-terminal. The recorder samples TF; it does not publish arm commands.
+No leader arms or teleop are used for the hand-guided path. The state-only
+launches use the follower URDF geometry with state interfaces only, so they
+read servo positions and publish TF while leaving the arms hand-movable. Move
+the arm by hand so the same physical point on the gripper touches each
+requested outer checkerboard-pattern corner, hold it still, then press Enter in
+the recorder terminal. The recorder samples TF; it does not publish arm
+commands unless `--jog-service` is supplied.
+
+If the arm is too stiff to aim by hand, use programmatic jog mode one arm at a
+time. Stop the state-only launch for that arm first, make sure teleop is not
+running, then start the command-enabled split launch with the forward arm
+controller.
+
+Left terminal L1:
+
+```bash
+cd "$WS"
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+
+ros2 launch so101_bringup follower_split.launch.py \
+  namespace:=left \
+  frame_prefix:=left/ \
+  hardware_type:=real \
+  usb_port:="$LEFT_PORT" \
+  joint_config_file:="$LEFT_JOINT_CONFIG" \
+  controller_config_file:="$OUT/config/left_split_controllers.yaml" \
+  arm_controller:=arm_forward_controller \
+  use_rviz:=false
+```
+
+Left terminal L2:
+
+```bash
+cd "$WS"
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+
+ros2 launch so101_kinematics cartesian_motion_split.launch.py arm:=left
+```
+
+Left recorder:
+
+```bash
+python3 "$WS/scripts/record_board_touch_points.py" \
+  --base-frame left/base_link \
+  --tool-frame left/gripper_frame_link \
+  --tool-offset '0 0 0' \
+  --cols 7 \
+  --rows 5 \
+  --square-m 0.02 \
+  --marker-m 0.014 \
+  --start-id 49 \
+  --dictionary DICT_5X5_100 \
+  --corner-layout tl_tr_bl_br \
+  --samples 11 \
+  --jog-service /left/go_to_pose \
+  --jog-step-m 0.002 \
+  --jog-duration-sec 1.5 \
+  --output "$OUT/touch/left_base_to_world_board.yaml"
+```
+
+Repeat the same pattern for the right arm with `right`, `$RIGHT_PORT`,
+`$RIGHT_JOINT_CONFIG`, `/right/go_to_pose`, and
+`right_base_to_world_board.yaml`.
+
+Jog prompt commands are `x+`, `x-`, `y+`, `y-`, `z+`, and `z-` in the arm base
+frame. Press Enter or type `sample` only when the tool is touching the requested
+corner. Use `step 0.001` or `step 0.005` to adjust the increment, `pose` to
+print the current TF pose, and `q` to abort without writing output.
 
 Do not force a stiff arm. If an arm fights you, a non-state-only launch or a
 previous failed process may still have torque enabled. Stop the launch/processes
