@@ -632,6 +632,18 @@ calib run-step touch_left_base
 calib run-step touch_right_base
 ```
 
+No leader arms or teleop are used for these steps. The state-only launches use
+the follower URDF geometry with state interfaces only, so they read servo
+positions and publish TF while leaving the arms hand-movable. Move the arm by
+hand so the same physical point on the gripper touches each requested outer
+checkerboard-pattern corner, hold it still, then press Enter in the recorder
+terminal. The recorder samples TF; it does not publish arm commands.
+
+Do not force a stiff arm. If an arm fights you, a non-state-only launch or a
+previous failed process may still have torque enabled. Stop the launch/processes
+first; if the arm remains stiff, run the torque-off snippet at the end of this
+runbook using the current left/right ports.
+
 If top-right is not reachable:
 
 ```bash
