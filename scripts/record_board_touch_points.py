@@ -440,6 +440,7 @@ def main() -> int:
         return 1
     finally:
         executor.shutdown()
+        spin_thread.join(timeout=1.0)
         node.destroy_node()
         rclpy.shutdown()
 
