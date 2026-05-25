@@ -672,7 +672,19 @@ when the tool is touching the requested corner. Use `step 0.001` or
 `step 0.005` to adjust Cartesian increments, `jstep 0.02` to adjust joint
 increments in radians, `pose` to print the current TF pose, `ref` to compare
 the current point against expected distances from already sampled corners, and
-`q` to abort without writing output.
+`sync` to rebase the direct-joint hold command to the currently measured joint
+positions. Use `q` to abort without writing output.
+
+Direct joint nudges hold an internal commanded joint vector and change only the
+requested joint. This avoids ratcheting gravity sag into the next command, for
+example `shoulder_lift` drifting down each time another joint is moved. After a
+Cartesian jog, the recorder automatically syncs that direct-joint hold vector
+to the measured joints so the next joint nudge does not snap back to an old
+pose. If the recorder still prints uncommanded drift for load-bearing joints,
+treat it as a real mechanical/control issue: the arm may be slipping under
+load, hitting backlash, or running with insufficient servo hold authority. Do
+not blindly increase EEPROM torque/current parameters during calibration; stop
+and tune the motor configuration deliberately.
 
 Do not force a stiff arm. If an arm fights you, a non-state-only launch or a
 previous failed process may still have torque enabled. Stop the launch/processes
