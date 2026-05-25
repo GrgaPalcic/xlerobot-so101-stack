@@ -127,22 +127,27 @@ def resolve_or_create_state(args: argparse.Namespace, workspace: Path) -> dict[s
     if args.out:
         out = Path(args.out).resolve()
         if (out / "run_state.yaml").exists():
-            return load_state(out)
+            return _with_workspace(load_state(out), workspace)
         return create_state(workspace, run_id=args.run_id or make_run_id(), out_dir=out)
     latest = find_latest_state(workspace)
     if latest is not None:
-        return latest
+        return _with_workspace(latest, workspace)
     run_id = args.run_id or make_run_id()
     return create_state(workspace, run_id=run_id, out_dir=default_out_dir(workspace, run_id))
 
 
 def resolve_existing_state(args: argparse.Namespace, workspace: Path) -> dict[str, Any]:
     if args.out:
-        return load_state(Path(args.out).resolve())
+        return _with_workspace(load_state(Path(args.out).resolve()), workspace)
     latest = find_latest_state(workspace)
     if latest is None:
         raise FileNotFoundError("no run_state.yaml found; start with xlerobot-calib wizard")
-    return latest
+    return _with_workspace(latest, workspace)
+
+
+def _with_workspace(state: dict[str, Any], workspace: Path) -> dict[str, Any]:
+    state["workspace"] = str(workspace.resolve())
+    return state
 
 
 def print_status(state: dict[str, Any]) -> None:

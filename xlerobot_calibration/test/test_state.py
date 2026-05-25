@@ -1,6 +1,8 @@
+from argparse import Namespace
 from pathlib import Path
 
 from xlerobot_calibration.board_presets import apply_board_preset, preset_names
+from xlerobot_calibration.cli import resolve_existing_state
 from xlerobot_calibration.report import write_report
 from xlerobot_calibration.runner import generate_controller_configs, generate_world_files, is_missing_config_value
 from xlerobot_calibration.state import create_state, load_state, mark_step
@@ -66,3 +68,15 @@ def test_board_presets_update_intrinsics_and_world_config(tmp_path: Path):
     assert state["config"]["intr_square_m"] == 0.034
     assert state["config"]["world_start_id"] == 83
     assert state["config"]["world_marker_m"] == 0.014
+
+
+def test_workspace_argument_overrides_stale_run_state_workspace(tmp_path: Path):
+    old_workspace = tmp_path / "old_ws"
+    new_workspace = tmp_path / "new_ws"
+    old_workspace.mkdir()
+    new_workspace.mkdir()
+    state = create_state(old_workspace, run_id="20260517T000000Z")
+
+    loaded = resolve_existing_state(Namespace(out=state["out_dir"]), new_workspace)
+
+    assert loaded["workspace"] == str(new_workspace.resolve())
