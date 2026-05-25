@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import math
 import os
+import shlex
 import shutil
+import signal
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +43,10 @@ def is_missing_config_value(value: Any) -> bool:
     if not text:
         return True
     return "CONFIRMED" in text or text.startswith("/path/to/")
+
+
+def shell_join(command: list[str]) -> str:
+    return " ".join(shlex.quote(part) for part in command)
 
 
 def confirm(message: str, yes: bool) -> bool:
@@ -119,6 +126,227 @@ def run_command_step(state: dict[str, Any], step: Step, *, dry_run: bool) -> Non
         )
         raise StepError(f"{step.id} failed, see {log_path}")
     mark_step(state, step.id, status="complete", log_path=str(log_path), returncode=result.returncode)
+
+
+def build_touch_jog_commands(
+    state: dict[str, Any],
+    side: str,
+    *,
+    tool_offset: str = "0 0 0",
+    corner_layout: str = "tl_tr_bl_br",
+    samples: int = 11,
+    jog_step_m: float = 0.002,
+    jog_duration_sec: float = 1.5,
+) -> tuple[list[str], list[str], list[str]]:
+    if side not in {"left", "right"}:
+        raise StepError(f"side must be left or right, got {side!r}")
+
+    cfg = state.get("config", {})
+    missing = [
+        key
+        for key in (
+            f"{side}_port",
+            f"{side}_joint_config",
+            "world_cols",
+            "world_rows",
+            "world_square_m",
+            "world_marker_m",
+            "world_start_id",
+            "world_dict",
+        )
+        if is_missing_config_value(cfg.get(key))
+    ]
+    if missing:
+        raise StepError(f"missing config for touch-jog {side}: {', '.join(missing)}")
+
+    workspace = str(Path(state["workspace"]))
+    out = Path(state["out_dir"])
+    controller_config = out / "config" / f"{side}_split_controllers.yaml"
+    touch_output = out / "touch" / f"{side}_base_to_world_board.yaml"
+
+    bringup_cmd = [
+        "ros2",
+        "launch",
+        "so101_bringup",
+        "follower_split.launch.py",
+        f"namespace:={side}",
+        f"frame_prefix:={side}/",
+        "hardware_type:=real",
+        f"usb_port:={cfg[f'{side}_port']}",
+        f"joint_config_file:={cfg[f'{side}_joint_config']}",
+        f"controller_config_file:={controller_config}",
+        "arm_controller:=arm_forward_controller",
+        "use_rviz:=false",
+    ]
+    motion_cmd = [
+        "ros2",
+        "launch",
+        "so101_kinematics",
+        "cartesian_motion_split.launch.py",
+        f"arm:={side}",
+    ]
+    recorder_cmd = [
+        "python3",
+        f"{workspace}/scripts/record_board_touch_points.py",
+        "--base-frame",
+        f"{side}/base_link",
+        "--tool-frame",
+        f"{side}/gripper_frame_link",
+        "--tool-offset",
+        tool_offset,
+        "--cols",
+        str(cfg["world_cols"]),
+        "--rows",
+        str(cfg["world_rows"]),
+        "--square-m",
+        str(cfg["world_square_m"]),
+        "--marker-m",
+        str(cfg["world_marker_m"]),
+        "--start-id",
+        str(cfg["world_start_id"]),
+        "--dictionary",
+        str(cfg["world_dict"]),
+        "--corner-layout",
+        corner_layout,
+        "--samples",
+        str(samples),
+        "--jog-service",
+        f"/{side}/go_to_pose",
+        "--jog-step-m",
+        str(jog_step_m),
+        "--jog-duration-sec",
+        str(jog_duration_sec),
+        "--output",
+        str(touch_output),
+    ]
+    return bringup_cmd, motion_cmd, recorder_cmd
+
+
+def run_touch_jog(
+    state: dict[str, Any],
+    side: str,
+    *,
+    tool_offset: str = "0 0 0",
+    corner_layout: str = "tl_tr_bl_br",
+    samples: int = 11,
+    jog_step_m: float = 0.002,
+    jog_duration_sec: float = 1.5,
+    dry_run: bool = False,
+    yes: bool = False,
+) -> None:
+    if step_status(state, "generate_world_files") != "complete":
+        raise StepError("missing prerequisite for touch-jog: generate_world_files")
+    if step_status(state, "generate_controller_configs") != "complete":
+        raise StepError("missing prerequisite for touch-jog: generate_controller_configs")
+    if step_status(state, "generate_joint_configs") != "complete":
+        raise StepError("missing prerequisite for touch-jog: generate_joint_configs")
+
+    bringup_cmd, motion_cmd, recorder_cmd = build_touch_jog_commands(
+        state,
+        side,
+        tool_offset=tool_offset,
+        corner_layout=corner_layout,
+        samples=samples,
+        jog_step_m=jog_step_m,
+        jog_duration_sec=jog_duration_sec,
+    )
+
+    print("")
+    print(f"# Touch jog: {side}")
+    print("This starts a real command controller and sends small GoToPose moves.")
+    print("Stop state-only/teleop for this arm before continuing.")
+    print("")
+    print("Commands that will run:")
+    print(shell_join(bringup_cmd))
+    print(shell_join(motion_cmd))
+    print(shell_join(recorder_cmd))
+    print("")
+
+    if dry_run:
+        return
+    if not confirm("Workspace is clear and this arm is safe to command?", yes):
+        raise StepError("operator declined touch-jog")
+
+    workspace = Path(state["workspace"])
+    out = Path(state["out_dir"])
+    logs = out / "logs"
+    bringup_log = logs / f"{side}_touch_jog_bringup.log"
+    motion_log = logs / f"{side}_touch_jog_motion.log"
+    env = os.environ.copy()
+    env.update(context(state))
+    env["PYTHONUNBUFFERED"] = "1"
+
+    processes: list[subprocess.Popen[str]] = []
+
+    def start_logged(command: list[str], log_path: Path) -> subprocess.Popen[str]:
+        log_file = log_path.open("w", encoding="utf-8")
+        proc = subprocess.Popen(
+            command,
+            cwd=workspace,
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+        proc._xlerobot_log_file = log_file  # type: ignore[attr-defined]
+        processes.append(proc)
+        return proc
+
+    try:
+        print(f"Starting arm bringup; log: {bringup_log}")
+        bringup = start_logged(bringup_cmd, bringup_log)
+        time.sleep(4.0)
+        if bringup.poll() is not None:
+            raise StepError(_process_failure_message("arm bringup", bringup, bringup_log))
+
+        print(f"Starting Cartesian motion node; log: {motion_log}")
+        motion = start_logged(motion_cmd, motion_log)
+        time.sleep(2.0)
+        if motion.poll() is not None:
+            raise StepError(_process_failure_message("Cartesian motion node", motion, motion_log))
+
+        print("")
+        print("Recorder starting. At each corner prompt, use x+/x-/y+/y-/z+/z- then Enter/sample.")
+        result = subprocess.run(recorder_cmd, cwd=workspace, env=env, text=True, check=False)
+        if result.returncode != 0:
+            mark_step(state, f"touch_{side}_base", status="failed", error=f"touch jog exited {result.returncode}")
+            raise StepError(f"touch jog exited {result.returncode}")
+
+        artifact = out / "touch" / f"{side}_base_to_world_board.yaml"
+        mark_step(state, f"touch_{side}_base", status="complete", artifacts=[str(artifact)])
+        print(f"Saved: {artifact}")
+    finally:
+        for proc in reversed(processes):
+            _terminate_process_group(proc)
+            log_file = getattr(proc, "_xlerobot_log_file", None)
+            if log_file is not None:
+                log_file.close()
+
+
+def _terminate_process_group(proc: subprocess.Popen[str]) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGINT)
+        proc.wait(timeout=5.0)
+    except Exception:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+            proc.wait(timeout=3.0)
+        except Exception:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except Exception:
+                pass
+
+
+def _process_failure_message(label: str, proc: subprocess.Popen[str], log_path: Path) -> str:
+    tail = ""
+    if log_path.exists():
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        tail = "\n".join(lines[-20:])
+    return f"{label} exited {proc.returncode}; see {log_path}\n{tail}"
 
 
 def run_action_step(state: dict[str, Any], step: Step, *, dry_run: bool) -> None:

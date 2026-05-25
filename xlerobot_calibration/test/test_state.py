@@ -1,10 +1,17 @@
 from argparse import Namespace
+import json
 from pathlib import Path
 
 from xlerobot_calibration.board_presets import apply_board_preset, preset_names
 from xlerobot_calibration.cli import resolve_existing_state
 from xlerobot_calibration.report import write_report
-from xlerobot_calibration.runner import generate_controller_configs, generate_world_files, is_missing_config_value
+from xlerobot_calibration.runner import (
+    build_touch_jog_commands,
+    generate_controller_configs,
+    generate_joint_configs,
+    generate_world_files,
+    is_missing_config_value,
+)
 from xlerobot_calibration.state import create_state, load_state, mark_step
 
 
@@ -68,6 +75,46 @@ def test_board_presets_update_intrinsics_and_world_config(tmp_path: Path):
     assert state["config"]["intr_square_m"] == 0.034
     assert state["config"]["world_start_id"] == 83
     assert state["config"]["world_marker_m"] == 0.014
+
+
+def test_touch_jog_commands_use_state_config(tmp_path: Path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    cfg_dir = workspace / "so101_bringup/config/ros2_control"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "follower_split_controllers.yaml").write_text("follower:\n  controller_manager: {}\n")
+    left_json = tmp_path / "left.json"
+    right_json = tmp_path / "right.json"
+    payload = {
+        name: {
+            "id": idx,
+            "homing_offset": 0,
+            "range_min": 0,
+            "range_max": 4095,
+        }
+        for idx, name in enumerate(
+            ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"],
+            start=1,
+        )
+    }
+    left_json.write_text(json.dumps(payload))
+    right_json.write_text(json.dumps(payload))
+    state = create_state(workspace, run_id="20260517T000000Z")
+    state["config"]["left_port"] = "/dev/serial/by-path/left"
+    state["config"]["left_lerobot_json"] = str(left_json)
+    state["config"]["right_lerobot_json"] = str(right_json)
+    generate_controller_configs(state)
+    generate_joint_configs(state)
+    generate_world_files(state)
+
+    bringup, motion, recorder = build_touch_jog_commands(state, "left")
+
+    assert "usb_port:=/dev/serial/by-path/left" in bringup
+    assert "namespace:=left" in bringup
+    assert "arm:=left" in motion
+    assert "--jog-service" in recorder
+    assert "/left/go_to_pose" in recorder
+    assert str(Path(state["out_dir"]) / "touch/left_base_to_world_board.yaml") in recorder
 
 
 def test_workspace_argument_overrides_stale_run_state_workspace(tmp_path: Path):

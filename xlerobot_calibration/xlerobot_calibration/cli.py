@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 
 from .board_presets import BOARD_PRESETS, apply_board_preset, preset_names
-from .runner import StepError, doctor, run_step
+from .runner import StepError, doctor, run_step, run_touch_jog
 from .state import (
     apply_config_overrides,
     create_state,
@@ -40,6 +40,18 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--dry-run", action="store_true")
     run.add_argument("--yes", action="store_true", help="Assume yes for prompts")
     run.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="Override run config")
+
+    touch_jog = sub.add_parser("touch-jog", help="Run one-arm terminal x/y/z jog touch calibration")
+    add_common_options(touch_jog)
+    touch_jog.add_argument("side", choices=("left", "right"))
+    touch_jog.add_argument("--tool-offset", default="0 0 0")
+    touch_jog.add_argument("--corner-layout", choices=("tl_tr_bl_br", "tl_bl_br"), default="tl_tr_bl_br")
+    touch_jog.add_argument("--samples", type=int, default=11)
+    touch_jog.add_argument("--jog-step-m", type=float, default=0.002)
+    touch_jog.add_argument("--jog-duration-sec", type=float, default=1.5)
+    touch_jog.add_argument("--dry-run", action="store_true")
+    touch_jog.add_argument("--yes", action="store_true", help="Assume yes for hardware prompt")
+    touch_jog.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="Override run config")
 
     status = sub.add_parser("status", help="Show current run status")
     add_common_options(status)
@@ -112,6 +124,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "run-step":
             apply_config_overrides(state, args.set)
             run_step(state, args.step_id, dry_run=args.dry_run, yes=args.yes)
+            return 0
+        if args.command == "touch-jog":
+            apply_config_overrides(state, args.set)
+            run_touch_jog(
+                state,
+                args.side,
+                tool_offset=args.tool_offset,
+                corner_layout=args.corner_layout,
+                samples=args.samples,
+                jog_step_m=args.jog_step_m,
+                jog_duration_sec=args.jog_duration_sec,
+                dry_run=args.dry_run,
+                yes=args.yes,
+            )
+            save_state(state)
             return 0
         if args.command == "export-report":
             run_step(state, "export_report", yes=True)

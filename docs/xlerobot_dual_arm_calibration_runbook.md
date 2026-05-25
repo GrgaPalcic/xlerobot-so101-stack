@@ -642,73 +642,21 @@ the recorder terminal. The recorder samples TF; it does not publish arm
 commands unless `--jog-service` is supplied.
 
 If the arm is too stiff to aim by hand, use programmatic jog mode one arm at a
-time. Stop the state-only launch for that arm first, make sure teleop is not
-running, then start the command-enabled split launch with the forward arm
-controller.
-
-Set the same variables in each terminal before using the commands below:
-
-```bash
-export WS=/home/dell/Documents/xlerobot-so101-stack
-export OUT=$WS/field_runs/xlerobot_printed_plate_20260520
-export LEFT_PORT=/dev/serial/by-path/pci-0000:00:14.0-usb-0:1.4:1.0-port0
-export RIGHT_PORT=/dev/serial/by-path/pci-0000:00:14.0-usb-0:1.3:1.0-port0
-export LEFT_JOINT_CONFIG=$OUT/config/left_joints_from_lerobot.yaml
-export RIGHT_JOINT_CONFIG=$OUT/config/right_joints_from_lerobot.yaml
-```
-
-Left terminal L1:
+time. Stop the state-only launch for that arm first and make sure teleop is not
+running. From the workspace root, one command starts the command-enabled split
+launch, starts the Cartesian jog service, runs the touch recorder, and cleans up
+the background launch processes when the recorder exits:
 
 ```bash
-cd "$WS"
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-
-ros2 launch so101_bringup follower_split.launch.py \
-  namespace:=left \
-  frame_prefix:=left/ \
-  hardware_type:=real \
-  usb_port:="$LEFT_PORT" \
-  joint_config_file:="$LEFT_JOINT_CONFIG" \
-  controller_config_file:="$OUT/config/left_split_controllers.yaml" \
-  arm_controller:=arm_forward_controller \
-  use_rviz:=false
+cd /home/dell/Documents/xlerobot-so101-stack
+./scripts/xlerobot_touch_jog.sh left
+./scripts/xlerobot_touch_jog.sh right
 ```
 
-Left terminal L2:
-
-```bash
-cd "$WS"
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-
-ros2 launch so101_kinematics cartesian_motion_split.launch.py arm:=left
-```
-
-Left recorder:
-
-```bash
-python3 "$WS/scripts/record_board_touch_points.py" \
-  --base-frame left/base_link \
-  --tool-frame left/gripper_frame_link \
-  --tool-offset '0 0 0' \
-  --cols 7 \
-  --rows 5 \
-  --square-m 0.02 \
-  --marker-m 0.014 \
-  --start-id 49 \
-  --dictionary DICT_5X5_100 \
-  --corner-layout tl_tr_bl_br \
-  --samples 11 \
-  --jog-service /left/go_to_pose \
-  --jog-step-m 0.002 \
-  --jog-duration-sec 1.5 \
-  --output "$OUT/touch/left_base_to_world_board.yaml"
-```
-
-Repeat the same pattern for the right arm with `right`, `$RIGHT_PORT`,
-`$RIGHT_JOINT_CONFIG`, `/right/go_to_pose`, and
-`right_base_to_world_board.yaml`.
+The wrapper reads ports, joint YAMLs, board dimensions, and output paths from
+the latest `field_runs/*/run_state.yaml`. To use a finer first step, append
+`--jog-step-m 0.001`. To avoid the independent top-right check, append
+`--corner-layout tl_bl_br`.
 
 Jog prompt commands are `x+`, `x-`, `y+`, `y-`, `z+`, and `z-` in the arm base
 frame. Press Enter or type `sample` only when the tool is touching the requested
