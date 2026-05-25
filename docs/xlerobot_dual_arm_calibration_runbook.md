@@ -664,8 +664,9 @@ in the arm base frame. They also include direct joint nudges: `pan+/-`,
 the Cartesian IK response is visibly off. Press Enter or type `sample` only
 when the tool is touching the requested corner. Use `step 0.001` or
 `step 0.005` to adjust Cartesian increments, `jstep 0.02` to adjust joint
-increments in radians, `pose` to print the current TF pose, and `q` to abort
-without writing output.
+increments in radians, `pose` to print the current TF pose, `ref` to compare
+the current point against expected distances from already sampled corners, and
+`q` to abort without writing output.
 
 Do not force a stiff arm. If an arm fights you, a non-state-only launch or a
 previous failed process may still have torque enabled. Stop the launch/processes

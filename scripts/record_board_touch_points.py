@@ -67,6 +67,13 @@ POINT_LAYOUTS = {
     ),
 }
 
+BOARD_CORNER_UV = {
+    "top_left": (0.0, 0.0),
+    "top_right": (1.0, 0.0),
+    "bottom_left": (0.0, 1.0),
+    "bottom_right": (1.0, 1.0),
+}
+
 JOG_DELTAS = {
     "x+": np.array([1.0, 0.0, 0.0], dtype=float),
     "x-": np.array([-1.0, 0.0, 0.0], dtype=float),
@@ -246,6 +253,19 @@ def sample_tool_point(
     return np.mean(arr, axis=0), np.std(arr, axis=0)
 
 
+def expected_corner_distance_m(
+    from_corner: str,
+    to_corner: str,
+    width_m: float,
+    height_m: float,
+) -> float | None:
+    if from_corner not in BOARD_CORNER_UV or to_corner not in BOARD_CORNER_UV:
+        return None
+    u0, v0 = BOARD_CORNER_UV[from_corner]
+    u1, v1 = BOARD_CORNER_UV[to_corner]
+    return float(math.hypot((u1 - u0) * width_m, (v1 - v0) * height_m))
+
+
 def parse_jog_command(text: str) -> JogCommand:
     command = text.strip().lower()
     if command in ("", "s", "sample", "record"):
@@ -256,6 +276,8 @@ def parse_jog_command(text: str) -> JogCommand:
         return JogCommand("help")
     if command == "pose":
         return JogCommand("pose")
+    if command in ("ref", "reference", "dist", "distance"):
+        return JogCommand("reference")
     if command in JOG_DELTAS:
         return JogCommand("move", delta_axis=JOG_DELTAS[command])
     if len(command) > 1 and command[-1] in "+-":
@@ -332,6 +354,7 @@ def format_jog_help(step_m: float, duration_s: float, joint_step_rad: float | No
         f"  step <meters>        change jog step (current {step_m:.4f} m)\n"
         f"  dur <seconds>        change motion duration (current {duration_s:.2f} s)\n"
         "  pose                 print current tool pose and touch point\n"
+        "  ref                  compare current point to accepted corner distances\n"
         "  sample / Enter       record this corner now\n"
         "  q                    abort without writing output"
     )
@@ -439,8 +462,17 @@ class JogSession:
         if not self.client.wait_for_service(timeout_sec=timeout_s):
             raise RuntimeError(f"jog service {service_name} is not available")
 
-    def run_corner_prompt(self, name: str, instruction: str) -> None:
+    def run_corner_prompt(
+        self,
+        name: str,
+        instruction: str,
+        *,
+        accepted_points: dict[str, np.ndarray],
+        width_m: float,
+        height_m: float,
+    ) -> None:
         print(f"[{name}] {instruction}")
+        self.print_reference(name, accepted_points, width_m, height_m)
         print(format_jog_help(self.step_m, self.duration_s, self._joint_step_rad()))
         while True:
             raw = input(f"{name} jog> ")
@@ -454,6 +486,9 @@ class JogSession:
                     print(format_jog_help(self.step_m, self.duration_s, self._joint_step_rad()))
                 elif command.kind == "pose":
                     self.print_pose()
+                    self.print_reference(name, accepted_points, width_m, height_m)
+                elif command.kind == "reference":
+                    self.print_reference(name, accepted_points, width_m, height_m)
                 elif command.kind == "step":
                     assert command.value is not None
                     if command.value > self.max_step_m:
@@ -518,6 +553,41 @@ class JogSession:
             f"{point[0]: .4f} {point[1]: .4f} {point[2]: .4f} m"
         )
         print(f"  tool quaternion xyzw:   {[round(v, 6) for v in quat]}")
+
+    def print_reference(
+        self,
+        target_name: str,
+        accepted_points: dict[str, np.ndarray],
+        width_m: float,
+        height_m: float,
+    ) -> None:
+        if not accepted_points:
+            return
+        current = wait_for_tool_point(
+            self.tf_buffer,
+            self.base_frame,
+            self.tool_frame,
+            self.tool_offset,
+            self.timeout_s,
+        )
+        lines = []
+        for accepted_name, accepted_point in accepted_points.items():
+            expected_m = expected_corner_distance_m(
+                accepted_name, target_name, width_m, height_m
+            )
+            if expected_m is None:
+                continue
+            observed_m = float(np.linalg.norm(current - accepted_point))
+            lines.append(
+                f"  if sampled now, distance from {accepted_name}: "
+                f"{observed_m * 1000.0:.1f} mm "
+                f"(expected {expected_m * 1000.0:.1f}, "
+                f"delta {(observed_m - expected_m) * 1000.0:+.1f})"
+            )
+        if lines:
+            print("Reference distances:")
+            for line in lines:
+                print(line)
 
     def move(self, delta_xyz: np.ndarray) -> None:
         T = wait_for_tool_pose(
@@ -827,7 +897,13 @@ def main() -> int:
                     print(f"[{name}] {instruction}")
                     input("Press Enter when the tool is touching that point...")
                 else:
-                    jog_session.run_corner_prompt(name, instruction)
+                    jog_session.run_corner_prompt(
+                        name,
+                        instruction,
+                        accepted_points=points,
+                        width_m=width_m,
+                        height_m=height_m,
+                    )
                 point, spread = sample_tool_point(
                     tf_buffer=tf_buffer,
                     base_frame=args.base_frame,

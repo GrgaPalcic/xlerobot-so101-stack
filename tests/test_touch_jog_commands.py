@@ -86,6 +86,23 @@ def test_parse_joint_command_with_explicit_step():
     assert command.value == 0.05
 
 
+def test_parse_reference_command():
+    module = load_module()
+
+    assert module.parse_jog_command("ref").kind == "reference"
+    assert module.parse_jog_command("distance").kind == "reference"
+
+
+def test_expected_corner_distance():
+    module = load_module()
+
+    assert module.expected_corner_distance_m("top_left", "top_right", 0.14, 0.10) == 0.14
+    assert module.expected_corner_distance_m("top_left", "bottom_left", 0.14, 0.10) == 0.10
+    assert module.expected_corner_distance_m("top_left", "bottom_right", 0.14, 0.10) == pytest.approx(
+        (0.14**2 + 0.10**2) ** 0.5
+    )
+
+
 def test_parse_jog_rejects_bad_command():
     module = load_module()
 
