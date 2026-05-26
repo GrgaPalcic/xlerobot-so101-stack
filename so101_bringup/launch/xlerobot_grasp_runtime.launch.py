@@ -59,6 +59,9 @@ def _runtime_nodes(context):
     grasp_server_address = LaunchConfiguration("grasp_server_address").perform(context)
     allow_execution = LaunchConfiguration("allow_execution").perform(context)
     allow_execution_bool = allow_execution.strip().lower() in {"1", "true", "yes", "on"}
+    execution_backend = LaunchConfiguration("execution_backend").perform(context).strip().lower()
+    if execution_backend not in {"moveit", "feedback"}:
+        raise RuntimeError(f"execution_backend must be moveit or feedback, got {execution_backend!r}")
     use_rviz = LaunchConfiguration("use_rviz").perform(context)
 
     if side not in {"left", "right"}:
@@ -119,7 +122,7 @@ def _runtime_nodes(context):
             "usb_port": LaunchConfiguration(f"{side}_port"),
             "joint_config_file": str(config_dir / f"{side}_joints_from_lerobot.yaml"),
             "controller_config_file": str(config_dir / f"{side}_split_controllers.yaml"),
-            "arm_controller": "arm_trajectory_controller",
+            "arm_controller": "arm_forward_controller" if execution_backend == "feedback" else "arm_trajectory_controller",
             "use_rviz": use_rviz,
         }.items(),
     )
@@ -158,7 +161,13 @@ def _runtime_nodes(context):
             moveit_py_params,
             moveit_dict,
             grasp_runtime_params,
-            {"allow_execution": allow_execution_bool, "moveit_node_name": moveit_node_name},
+            {
+                "allow_execution": allow_execution_bool,
+                "moveit_node_name": moveit_node_name,
+                "execution_backend": execution_backend,
+                "feedback_cmd_topic": f"/{side}/arm_forward_controller/commands",
+                "joint_states_topic": f"/{side}/joint_states",
+            },
         ],
         output="screen",
     )
@@ -176,6 +185,7 @@ def generate_launch_description():
             DeclareLaunchArgument("right_port", default_value=""),
             DeclareLaunchArgument("grasp_server_address", default_value="127.0.0.1:8091"),
             DeclareLaunchArgument("allow_execution", default_value="false"),
+            DeclareLaunchArgument("execution_backend", default_value="moveit"),
             DeclareLaunchArgument("use_rviz", default_value="false"),
             OpaqueFunction(function=_runtime_nodes),
         ]

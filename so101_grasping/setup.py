@@ -15,6 +15,7 @@ setup(
         "msgpack>=1.0",
         "numpy>=1.24",
         "pyzmq>=25.0",
+        "robokin[placo]",
     ],
     zip_safe=True,
     maintainer="Dmitri Manajev",

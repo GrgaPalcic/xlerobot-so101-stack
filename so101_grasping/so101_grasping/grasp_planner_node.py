@@ -29,6 +29,7 @@ from sensor_msgs_py import point_cloud2
 from shape_msgs.msg import SolidPrimitive
 from tf_transformations import quaternion_from_euler, quaternion_from_matrix, quaternion_matrix
 from tf2_ros import Buffer, TransformListener
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from visualization_msgs.msg import Marker, MarkerArray
 
 from so101_grasping.grasp_staging import (
@@ -125,12 +126,24 @@ class GraspPlannerNode(Node):
         self.declare_parameter("detect_service", "/detect_grasps")
         self.declare_parameter("plan_service", "/plan_grasp")
         self.declare_parameter("allow_execution", False)
+        self.declare_parameter("execution_backend", "moveit")
         self.declare_parameter("moveit_node_name", "so101_grasp_moveit_py")
         self.declare_parameter("grasp_frame", BASE_FRAME)
         self.declare_parameter("arm_base_frame", BASE_FRAME)
         self.declare_parameter("moveit_frame", MOVEIT_FRAME)
         self.declare_parameter("ee_frame", EE_FRAME)
         self.declare_parameter("joint_states_topic", "/follower/joint_states")
+        self.declare_parameter("feedback_cmd_topic", "/follower/arm_forward_controller/commands")
+        self.declare_parameter("feedback_rate_hz", 50.0)
+        self.declare_parameter("feedback_position_tolerance_m", 0.015)
+        self.declare_parameter("feedback_ik_position_tolerance_m", 0.060)
+        self.declare_parameter("feedback_joint_tolerance_rad", 0.18)
+        self.declare_parameter("feedback_max_correction_iters", 4)
+        self.declare_parameter("feedback_settle_s", 0.35)
+        self.declare_parameter("feedback_min_joint_delta_rad", 0.035)
+        self.declare_parameter("feedback_max_joint_speed_rad_s", 0.45)
+        self.declare_parameter("feedback_min_motion_duration_s", 0.80)
+        self.declare_parameter("feedback_joint_state_timeout_s", 3.0)
         self.declare_parameter("object_cloud_topic", "/so101_grasping/object_cloud")
         self.declare_parameter("wrist_object_cloud_topic", "/so101_grasping/wrist_object_cloud")
         self.declare_parameter("display_topic", "/so101_grasping/display_planned_path")
@@ -199,12 +212,14 @@ class GraspPlannerNode(Node):
         )
 
         self._allow_execution = bool(self.get_parameter("allow_execution").value)
+        self._execution_backend = self._normalized_execution_backend()
         self._moveit_node_name = str(self.get_parameter("moveit_node_name").value)
         self._grasp_frame = str(self.get_parameter("grasp_frame").value)
         self._arm_base_frame = str(self.get_parameter("arm_base_frame").value)
         self._moveit_frame = str(self.get_parameter("moveit_frame").value)
         self._ee_frame = str(self.get_parameter("ee_frame").value)
         self._joint_states_topic = str(self.get_parameter("joint_states_topic").value)
+        self._feedback_cmd_topic = str(self.get_parameter("feedback_cmd_topic").value)
         self._default_prompt = str(self.get_parameter("default_prompt").value)
         self._default_top_k = int(self.get_parameter("default_top_k").value)
         self._detect_timeout_s = max(1.0, float(self.get_parameter("detect_timeout_s").value))
@@ -363,6 +378,29 @@ class GraspPlannerNode(Node):
         self._cloud_lock = threading.Lock()
         self._plan_lock = threading.Lock()
 
+        self._moveit: MoveItPy | None = None
+        self._arm = None
+        self._plan_params = None
+        self._feedback_executor = None
+        self._moveit_joint_names = list(ARM_JOINT_NAMES)
+        if self._execution_backend == "feedback":
+            self._init_feedback_executor()
+        else:
+            self._init_moveit()
+        self._wrist_roll_joint_name = self._find_joint_name("wrist_roll")
+        self.get_logger().info(
+            f"grasp_planner_node ready: /plan_grasp, arm_base={self._arm_base_frame}, "
+            f"moveit_frame={self._moveit_frame}, execution_backend={self._execution_backend}, "
+            f"allow_execution={self._allow_execution}"
+        )
+
+    def _normalized_execution_backend(self) -> str:
+        value = str(self.get_parameter("execution_backend").value).strip().lower()
+        if value in {"feedback", "closed_loop", "closed-loop"}:
+            return "feedback"
+        return "moveit"
+
+    def _init_moveit(self) -> None:
         self.get_logger().info("Initializing MoveItPy grasp planner")
         self._moveit = MoveItPy(
             node_name=self._moveit_node_name,
@@ -372,12 +410,39 @@ class GraspPlannerNode(Node):
         self._moveit_joint_names = list(getattr(joint_model_group, "active_joint_model_names", []))
         if not self._moveit_joint_names:
             self._moveit_joint_names = list(ARM_JOINT_NAMES)
-        self._wrist_roll_joint_name = self._find_joint_name("wrist_roll")
         self._arm = self._moveit.get_planning_component(PLANNING_GROUP)
         self._plan_params = MultiPipelinePlanRequestParameters(self._moveit, [self._planner_parameter_set])
-        self.get_logger().info(
-            f"grasp_planner_node ready: /plan_grasp, arm_base={self._arm_base_frame}, "
-            f"moveit_frame={self._moveit_frame}, allow_execution={self._allow_execution}"
+
+    def _init_feedback_executor(self) -> None:
+        self.get_logger().info("Initializing measured-joint feedback grasp executor")
+        from so101_grasping.feedback_executor import FeedbackArmExecutor
+
+        self._feedback_executor = FeedbackArmExecutor(
+            self,
+            joint_states_topic=self._joint_states_topic,
+            cmd_topic=self._feedback_cmd_topic,
+            base_frame=self._arm_base_frame,
+            moveit_frame=self._moveit_frame,
+            ee_frame=self._ee_frame,
+            arm_joint_names=list(ARM_JOINT_NAMES),
+            gripper_joint_name=GRIPPER_JOINT_NAME,
+        )
+        self._refresh_feedback_settings()
+
+    def _refresh_feedback_settings(self) -> None:
+        if self._feedback_executor is None:
+            return
+        self._feedback_executor.configure(
+            rate_hz=float(self.get_parameter("feedback_rate_hz").value),
+            position_tolerance_m=float(self.get_parameter("feedback_position_tolerance_m").value),
+            ik_position_tolerance_m=float(self.get_parameter("feedback_ik_position_tolerance_m").value),
+            joint_tolerance_rad=float(self.get_parameter("feedback_joint_tolerance_rad").value),
+            max_correction_iters=int(self.get_parameter("feedback_max_correction_iters").value),
+            settle_s=float(self.get_parameter("feedback_settle_s").value),
+            min_joint_delta_rad=float(self.get_parameter("feedback_min_joint_delta_rad").value),
+            max_joint_speed_rad_s=float(self.get_parameter("feedback_max_joint_speed_rad_s").value),
+            min_motion_duration_s=float(self.get_parameter("feedback_min_motion_duration_s").value),
+            joint_state_timeout_s=float(self.get_parameter("feedback_joint_state_timeout_s").value),
         )
 
     def _float_parameter_list(self, name: str, fallback: list[float]) -> list[float]:
@@ -431,6 +496,14 @@ class GraspPlannerNode(Node):
             self._plan_lock.release()
 
     def _plan_grasp_locked(self, request: PlanGrasp.Request, response: PlanGrasp.Response):
+        self._execution_backend = self._normalized_execution_backend()
+        if self._execution_backend == "feedback":
+            if self._feedback_executor is None:
+                self._init_feedback_executor()
+            self._refresh_feedback_settings()
+        elif self._moveit is None:
+            self._init_moveit()
+
         prompt = request.prompt.strip() or self._default_prompt
         top_k = int(request.top_k) if int(request.top_k) > 0 else self._default_top_k
         pregrasp_offset = (
@@ -462,8 +535,9 @@ class GraspPlannerNode(Node):
             response.message = f"failed to transform grasp candidates into {self._arm_base_frame}: {exc}"
             return response
 
-        self._sync_collision_scene()
-        selection, failures = self._select_plan_from_grasps(
+        if self._execution_backend == "moveit":
+            self._sync_collision_scene()
+        selection, failures = self._select_plan_for_backend(
             planning_grasps,
             requested_index=int(request.grasp_index),
             pregrasp_offset=pregrasp_offset,
@@ -510,17 +584,42 @@ class GraspPlannerNode(Node):
         response.success = False
         response.planned = False
         response.executed = False
-        response.message = "No candidate produced a MoveIt plan. " + " | ".join(failures[:10])
+        response.message = f"No candidate produced a {self._execution_backend} plan. " + " | ".join(failures[:10])
         return response
 
     def _fill_plan_response(self, response: PlanGrasp.Response, selection: PlanSelection) -> None:
         response.selected_grasp = _copy_grasp(selection.grasp)
         response.pregrasp_pose = self._pregrasp_pose_from_stages(selection.planned_stages)
-        response.trajectory = self._joint_trajectory_from_plan(selection.planned_stages[-1].result)
-        self._publish_display_trajectories([
-            self._robot_trajectory_msg_from_plan(stage.result) for stage in selection.planned_stages
-        ])
+        if self._selection_uses_feedback(selection):
+            response.trajectory = self._feedback_trajectory_from_selection(selection)
+        else:
+            response.trajectory = self._joint_trajectory_from_plan(selection.planned_stages[-1].result)
+            self._publish_display_trajectories([
+                self._robot_trajectory_msg_from_plan(stage.result) for stage in selection.planned_stages
+            ])
         self._publish_plan_markers(selection.grasp, selection.planned_stages)
+
+    def _selection_uses_feedback(self, selection: PlanSelection) -> bool:
+        return any(hasattr(stage.result, "joint_names") and hasattr(stage.result, "positions") for stage in selection.planned_stages)
+
+    def _feedback_trajectory_from_selection(self, selection: PlanSelection) -> JointTrajectory:
+        trajectory = JointTrajectory()
+        if self._feedback_executor is not None:
+            trajectory.joint_names = self._feedback_executor.arm_joint_names
+        else:
+            trajectory.joint_names = list(ARM_JOINT_NAMES)
+        stamp_ns = 0
+        for stage in selection.planned_stages:
+            result = stage.result
+            if not hasattr(result, "positions"):
+                continue
+            point = JointTrajectoryPoint()
+            point.positions = [float(value) for value in result.positions]
+            stamp_ns += 1_000_000_000
+            point.time_from_start.sec = stamp_ns // 1_000_000_000
+            point.time_from_start.nanosec = stamp_ns % 1_000_000_000
+            trajectory.points.append(point)
+        return trajectory
 
     def _frame_transform(self, target_frame: str, source_frame: str) -> np.ndarray:
         if target_frame == source_frame:
@@ -560,6 +659,126 @@ class GraspPlannerNode(Node):
         planned.pose = _pose_from_matrix(target_from_source @ _pose_matrix(position, quat))
         planned.header.frame_id = self._arm_base_frame
         return planned
+
+    def _select_plan_for_backend(
+        self,
+        grasps,
+        *,
+        requested_index: int,
+        pregrasp_offset: float,
+        deadline: float,
+        strip_initial_ready: bool = False,
+    ) -> tuple[PlanSelection | None, list[str]]:
+        if self._execution_backend == "feedback":
+            return self._select_feedback_plan_from_grasps(
+                grasps,
+                requested_index=requested_index,
+                pregrasp_offset=pregrasp_offset,
+                deadline=deadline,
+                strip_initial_ready=strip_initial_ready,
+            )
+        return self._select_plan_from_grasps(
+            grasps,
+            requested_index=requested_index,
+            pregrasp_offset=pregrasp_offset,
+            deadline=deadline,
+            strip_initial_ready=strip_initial_ready,
+        )
+
+    def _select_feedback_plan_from_grasps(
+        self,
+        grasps,
+        *,
+        requested_index: int,
+        pregrasp_offset: float,
+        deadline: float,
+        strip_initial_ready: bool = False,
+    ) -> tuple[PlanSelection | None, list[str]]:
+        if self._feedback_executor is None:
+            return None, ["feedback executor is not initialized"]
+        ordered_grasps = list(grasps)
+        if requested_index > 0 and requested_index < len(ordered_grasps):
+            ordered_grasps = [ordered_grasps[requested_index]] + [
+                grasp for idx, grasp in enumerate(ordered_grasps) if idx != requested_index
+            ]
+        ordered_grasps = ordered_grasps[: self._max_plan_candidates]
+
+        failures: list[str] = []
+        best_selection: PlanSelection | None = None
+        best_wrist_delta = float("inf")
+        reference_wrist_roll = self._current_wrist_roll()
+        for idx, grasp in enumerate(ordered_grasps):
+            if time.monotonic() >= deadline:
+                failures.append(f"planning budget exhausted after {idx} candidate(s)")
+                break
+            reach_filter_reason = self._reach_filter_reason(grasp)
+            if reach_filter_reason is not None:
+                failures.append(f"candidate {idx}: {reach_filter_reason}")
+                continue
+
+            attempted = False
+            options = self._make_so101_primitive_options(grasp, pregrasp_offset)[
+                : self._max_primitive_options_per_candidate
+            ]
+            self.get_logger().info(
+                f"candidate {idx}: generated {len(options)} feedback primitive option(s) "
+                f"after cap={self._max_primitive_options_per_candidate}"
+            )
+            for option_label, pose_stages in options:
+                if time.monotonic() >= deadline:
+                    failures.append(f"candidate {idx}: planning budget exhausted")
+                    break
+                attempted = True
+                if strip_initial_ready:
+                    pose_stages = self._strip_initial_ready_stage(pose_stages)
+                    if not pose_stages:
+                        failures.append(f"candidate {idx} {option_label}: no stages after ready strip")
+                        continue
+                    option_label = f"wrist_refined_{option_label}"
+                results, message, wrist_delta = self._feedback_executor.solve_sequence(
+                    pose_stages,
+                    reference_wrist_roll=reference_wrist_roll,
+                    max_wrist_roll_delta_rad=self._max_wrist_roll_delta(),
+                )
+                if results:
+                    planned_stages = [
+                        PlannedStage(stage.name, stage.pose, result, stage.configuration_name)
+                        for stage, result in zip(pose_stages, results, strict=False)
+                    ]
+                    wrist_note = self._wrist_roll_note(wrist_delta)
+                    selection = PlanSelection(
+                        candidate_index=idx,
+                        grasp=grasp,
+                        planned_stages=planned_stages,
+                        primitive_stages=pose_stages,
+                        strategy_label=option_label,
+                        message=message + self._close_target_note(pose_stages) + wrist_note,
+                        wrist_roll_delta_rad=wrist_delta,
+                    )
+                    if not self._prefer_low_wrist_roll_enabled() or wrist_delta is None:
+                        return selection, failures
+                    preferred_delta = self._preferred_wrist_roll_delta()
+                    if wrist_delta <= preferred_delta:
+                        return selection, failures
+                    if wrist_delta < best_wrist_delta:
+                        best_selection = selection
+                        best_wrist_delta = wrist_delta
+                    failures.append(
+                        f"candidate {idx} {option_label}: feedback feasible but wrist_roll_delta="
+                        f"{wrist_delta:.3f}rad; searching for <= {preferred_delta:.3f}rad"
+                    )
+                    continue
+                final_pose_stage = next((stage for stage in reversed(pose_stages) if stage.pose is not None), None)
+                final_pose = final_pose_stage.pose.pose.position if final_pose_stage is not None else Point()
+                failures.append(
+                    f"candidate {idx} {option_label}: {message} "
+                    f"close_target=({final_pose.x:.3f},{final_pose.y:.3f},{final_pose.z:.3f})"
+                )
+            if not attempted:
+                failures.append(f"candidate {idx}: no SO-101 primitive options generated")
+        if best_selection is not None:
+            return best_selection, failures
+        return None, failures
 
     def _select_plan_from_grasps(
         self,
@@ -1125,6 +1344,8 @@ class GraspPlannerNode(Node):
         return float(positions[index])
 
     def _current_wrist_roll(self) -> float | None:
+        if self._execution_backend == "feedback" and self._feedback_executor is not None:
+            return self._feedback_executor.current_wrist_roll()
         try:
             return self._state_joint_position(self._current_robot_state(), self._wrist_roll_joint_name)
         except Exception as exc:  # noqa: BLE001 - planning can continue without the roll heuristic.
@@ -1368,6 +1589,8 @@ class GraspPlannerNode(Node):
         return False, f"gripper did not reach goal (stalled={stalled})"
 
     def _current_arm_positions(self) -> np.ndarray:
+        if self._execution_backend == "feedback" and self._feedback_executor is not None:
+            return self._feedback_executor.current_arm_positions()
         state = self._current_robot_state()
         return np.asarray(state.get_joint_group_positions(PLANNING_GROUP), dtype=np.float64)
 
@@ -1450,6 +1673,57 @@ class GraspPlannerNode(Node):
                 f"wrist-refine wrist cloud is stale ({age_s:.1f}s > {self._max_wrist_cloud_age_s:.1f}s)",
             )
         return True, f"wrist-refine wrist cloud ok ({count} points, age={age_s:.1f}s)"
+
+    def _execute_feedback_arm_stages(
+        self,
+        stages: list[PrimitiveStage],
+        *,
+        prompt: str,
+        top_k: int,
+        executed_messages: list[str],
+        refresh_before_descent: bool,
+        confirmation_target: np.ndarray | None = None,
+    ) -> tuple[bool, str]:
+        if self._feedback_executor is None:
+            return False, "feedback executor is not initialized"
+        self._refresh_feedback_settings()
+        reference_wrist_roll = self._current_wrist_roll()
+        for stage in stages:
+            if stage.name.endswith("descent_close"):
+                if refresh_before_descent:
+                    refresh_ok, refresh_message = self._refresh_wrist_confirmation(
+                        prompt,
+                        top_k,
+                        confirmation_target=confirmation_target,
+                    )
+                else:
+                    refresh_ok = True
+                    refresh_message = "wrist confirmation already refreshed before final plan"
+                wrist_ok, wrist_message = self._execution_wrist_cloud_check()
+                executed_messages.append(refresh_message)
+                if not refresh_ok:
+                    return (
+                        False,
+                        "feedback execution stopped before descent/close: "
+                        + " -> ".join(executed_messages + [wrist_message]),
+                    )
+                if not wrist_ok:
+                    return (
+                        False,
+                        "feedback execution stopped before descent/close: "
+                        + " -> ".join(executed_messages + [wrist_message]),
+                    )
+
+            self.get_logger().info(f"Executing feedback SO-101 grasp stage: {stage.name}")
+            ok, message = self._feedback_executor.execute_stage(
+                stage,
+                reference_wrist_roll=reference_wrist_roll,
+                max_wrist_roll_delta_rad=self._max_wrist_roll_delta(),
+            )
+            executed_messages.append(message)
+            if not ok:
+                return False, "feedback execution stopped after arm motion: " + " -> ".join(executed_messages)
+        return True, " -> ".join(executed_messages)
 
     def _execute_arm_stages(
         self,
@@ -1626,7 +1900,16 @@ class GraspPlannerNode(Node):
                 return False, f"execution stopped before arm motion: {open_message}"
             executed_messages.append(f"preopen: {open_message}")
 
-        if planned_stages is None:
+        if self._execution_backend == "feedback":
+            arm_ok, arm_message = self._execute_feedback_arm_stages(
+                primitive_stages,
+                prompt=prompt,
+                top_k=top_k,
+                executed_messages=executed_messages,
+                refresh_before_descent=True,
+                confirmation_target=confirmation_target,
+            )
+        elif planned_stages is None:
             arm_ok, arm_message = self._execute_arm_stages(
                 primitive_stages,
                 prompt=prompt,
@@ -1672,13 +1955,22 @@ class GraspPlannerNode(Node):
         initial_target = self._wrist_refine_target(initial_selection.grasp).copy()
         executed_messages = [f"preopen: {open_message}"]
         view_stages = self._wrist_refine_view_stages(initial_selection)
-        view_ok, view_message = self._execute_arm_stages(
-            view_stages,
-            prompt=prompt,
-            top_k=top_k,
-            executed_messages=executed_messages,
-            refresh_before_descent=False,
-        )
+        if self._execution_backend == "feedback":
+            view_ok, view_message = self._execute_feedback_arm_stages(
+                view_stages,
+                prompt=prompt,
+                top_k=top_k,
+                executed_messages=executed_messages,
+                refresh_before_descent=False,
+            )
+        else:
+            view_ok, view_message = self._execute_arm_stages(
+                view_stages,
+                prompt=prompt,
+                top_k=top_k,
+                executed_messages=executed_messages,
+                refresh_before_descent=False,
+            )
         if not view_ok:
             return False, "wrist-refine view move failed: " + view_message, None
 
@@ -1774,7 +2066,7 @@ class GraspPlannerNode(Node):
                 )
             return False, "wrist-refine refused overhead-only replan: " + wrist_message, None
 
-        refined_selection, failures = self._select_plan_from_grasps(
+        refined_selection, failures = self._select_plan_for_backend(
             refreshed_grasps,
             requested_index=0,
             pregrasp_offset=pregrasp_offset,

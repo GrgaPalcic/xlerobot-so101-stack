@@ -19,6 +19,7 @@
   <exec_depend>sensor_msgs_py</exec_depend>
   <exec_depend>shape_msgs</exec_depend>
   <exec_depend>so101_grasp_msgs</exec_depend>
+  <exec_depend>so101_kinematics</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>tf_transformations</exec_depend>
