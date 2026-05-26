@@ -24,6 +24,8 @@ MAX_WRIST_ROLL_DELTA_RAD="${MAX_WRIST_ROLL_DELTA_RAD:-0.90}"
 FEEDBACK_POSITION_TOLERANCE_M="${FEEDBACK_POSITION_TOLERANCE_M:-0.015}"
 FEEDBACK_MAX_CORRECTION_ITERS="${FEEDBACK_MAX_CORRECTION_ITERS:-4}"
 FEEDBACK_MIN_JOINT_DELTA_RAD="${FEEDBACK_MIN_JOINT_DELTA_RAD:-0.035}"
+FEEDBACK_CORRECTION_COMMAND_GAIN="${FEEDBACK_CORRECTION_COMMAND_GAIN:-1.45}"
+FEEDBACK_MAX_OVERCOMMAND_RAD="${FEEDBACK_MAX_OVERCOMMAND_RAD:-0.12}"
 WRIST_CONFIRMATION_BEFORE_DESCENT="${WRIST_CONFIRMATION_BEFORE_DESCENT:-true}"
 REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION="${REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION:-false}"
 REQUIRE_WRIST_CLOUD_FOR_EXECUTION="${REQUIRE_WRIST_CLOUD_FOR_EXECUTION:-false}"
@@ -273,6 +275,8 @@ apply_planner_runtime_params() {
   ros2 param set "/${side}_grasp/grasp_planner_node" feedback_position_tolerance_m "${FEEDBACK_POSITION_TOLERANCE_M}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" feedback_max_correction_iters "${FEEDBACK_MAX_CORRECTION_ITERS}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" feedback_min_joint_delta_rad "${FEEDBACK_MIN_JOINT_DELTA_RAD}" >/dev/null
+  ros2 param set "/${side}_grasp/grasp_planner_node" feedback_correction_command_gain "${FEEDBACK_CORRECTION_COMMAND_GAIN}" >/dev/null
+  ros2 param set "/${side}_grasp/grasp_planner_node" feedback_max_overcommand_rad "${FEEDBACK_MAX_OVERCOMMAND_RAD}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" wrist_confirmation_before_descent "${WRIST_CONFIRMATION_BEFORE_DESCENT}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" require_wrist_confirmation_for_execution "${REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" require_wrist_cloud_for_execution "${REQUIRE_WRIST_CLOUD_FOR_EXECUTION}" >/dev/null
@@ -296,7 +300,7 @@ plan() {
   apply_planner_runtime_params
   echo "execution_backend=${EXECUTION_BACKEND}"
   echo "wrist_roll prefer_low=${PREFER_LOW_WRIST_ROLL} preferred_delta=${PREFERRED_WRIST_ROLL_DELTA_RAD} max_delta=${MAX_WRIST_ROLL_DELTA_RAD}"
-  echo "feedback tolerance=${FEEDBACK_POSITION_TOLERANCE_M}m corrections=${FEEDBACK_MAX_CORRECTION_ITERS} min_joint_delta=${FEEDBACK_MIN_JOINT_DELTA_RAD}rad"
+  echo "feedback tolerance=${FEEDBACK_POSITION_TOLERANCE_M}m corrections=${FEEDBACK_MAX_CORRECTION_ITERS} min_joint_delta=${FEEDBACK_MIN_JOINT_DELTA_RAD}rad correction_gain=${FEEDBACK_CORRECTION_COMMAND_GAIN} max_overcommand=${FEEDBACK_MAX_OVERCOMMAND_RAD}rad"
   echo "wrist_confirmation before_descent=${WRIST_CONFIRMATION_BEFORE_DESCENT} require_match=${REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION} require_cloud=${REQUIRE_WRIST_CLOUD_FOR_EXECUTION}"
   call_ros_service "${PLAN_CALL_TIMEOUT_S}" "${LOG_DIR}/${side}_plan_grasp.txt" \
     "/${side}_grasp/plan_grasp" so101_grasp_msgs/srv/PlanGrasp \
@@ -413,7 +417,7 @@ execute_grasp() {
   echo "execution_backend=${EXECUTION_BACKEND}"
   echo "wrist_refine_before_grasp=${WRIST_REFINE_BEFORE_GRASP}"
   echo "wrist_roll prefer_low=${PREFER_LOW_WRIST_ROLL} preferred_delta=${PREFERRED_WRIST_ROLL_DELTA_RAD} max_delta=${MAX_WRIST_ROLL_DELTA_RAD}"
-  echo "feedback tolerance=${FEEDBACK_POSITION_TOLERANCE_M}m corrections=${FEEDBACK_MAX_CORRECTION_ITERS} min_joint_delta=${FEEDBACK_MIN_JOINT_DELTA_RAD}rad"
+  echo "feedback tolerance=${FEEDBACK_POSITION_TOLERANCE_M}m corrections=${FEEDBACK_MAX_CORRECTION_ITERS} min_joint_delta=${FEEDBACK_MIN_JOINT_DELTA_RAD}rad correction_gain=${FEEDBACK_CORRECTION_COMMAND_GAIN} max_overcommand=${FEEDBACK_MAX_OVERCOMMAND_RAD}rad"
   echo "wrist_confirmation before_descent=${WRIST_CONFIRMATION_BEFORE_DESCENT} require_match=${REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION} require_cloud=${REQUIRE_WRIST_CLOUD_FOR_EXECUTION}"
   ros2 param set "/${side}_grasp/grasp_planner_node" allow_execution true >/dev/null
   trap 'ros2 param set "/'"${side}"'_grasp/grasp_planner_node" allow_execution false >/dev/null 2>&1 || true' EXIT

@@ -119,6 +119,8 @@ class FeedbackArmExecutor:
         self.max_joint_speed_rad_s = 0.45
         self.min_motion_duration_s = 0.80
         self.joint_state_timeout_s = 3.0
+        self.correction_command_gain = 1.45
+        self.max_overcommand_rad = 0.12
 
     @property
     def joint_names(self) -> list[str]:
@@ -141,6 +143,8 @@ class FeedbackArmExecutor:
         max_joint_speed_rad_s: float,
         min_motion_duration_s: float,
         joint_state_timeout_s: float,
+        correction_command_gain: float,
+        max_overcommand_rad: float,
     ) -> None:
         self.rate_hz = max(5.0, float(rate_hz))
         self.position_tolerance_m = max(0.001, float(position_tolerance_m))
@@ -152,6 +156,8 @@ class FeedbackArmExecutor:
         self.max_joint_speed_rad_s = max(0.05, float(max_joint_speed_rad_s))
         self.min_motion_duration_s = max(0.05, float(min_motion_duration_s))
         self.joint_state_timeout_s = max(0.2, float(joint_state_timeout_s))
+        self.correction_command_gain = max(1.0, float(correction_command_gain))
+        self.max_overcommand_rad = max(0.0, float(max_overcommand_rad))
 
     def _on_joint_state(self, msg: JointState) -> None:
         values = self._measured_q.copy() if self._measured_q is not None else np.zeros(len(self._joint_names))
@@ -295,7 +301,17 @@ class FeedbackArmExecutor:
                     f"{metric_name}={metric:.4f})",
                 )
 
-            self._stream_joint_goal(measured, q_goal)
+            command_goal = q_goal
+            if attempt > 0 and getattr(stage, "pose", None) is not None:
+                command_goal = self._correction_command_goal(measured, q_goal)
+                command_delta = self._max_arm_delta(q_goal, command_goal)
+                if command_delta > 0.0:
+                    self._node.get_logger().info(
+                        f"{stage.name}: applying capped feedback over-command "
+                        f"max_extra={command_delta:.3f}rad"
+                    )
+
+            self._stream_joint_goal(measured, command_goal)
             if self.settle_s > 0.0:
                 time.sleep(self.settle_s)
 
@@ -440,6 +456,20 @@ class FeedbackArmExecutor:
 
     def _max_arm_delta(self, q_start: np.ndarray, q_goal: np.ndarray) -> float:
         return float(np.max(np.abs(q_goal[self._arm_indices] - q_start[self._arm_indices])))
+
+    def _correction_command_goal(self, q_start: np.ndarray, q_goal: np.ndarray) -> np.ndarray:
+        command_goal = np.asarray(q_goal, dtype=np.float64).copy()
+        if self.correction_command_gain <= 1.0 or self.max_overcommand_rad <= 0.0:
+            return command_goal
+        extra = (command_goal - q_start) * (self.correction_command_gain - 1.0)
+        extra[self._gripper_index] = 0.0
+        extra[self._arm_indices] = np.clip(
+            extra[self._arm_indices],
+            -self.max_overcommand_rad,
+            self.max_overcommand_rad,
+        )
+        command_goal[self._arm_indices] = command_goal[self._arm_indices] + extra[self._arm_indices]
+        return command_goal
 
     def _stream_joint_goal(self, q_start: np.ndarray, q_goal: np.ndarray) -> None:
         delta = q_goal - q_start
