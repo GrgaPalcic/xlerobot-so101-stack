@@ -90,6 +90,13 @@ switch to the refreshed wrist target unless `WRIST_REFINE_BEFORE_GRASP=true`.
 Each `detect`, `plan`, and `execute` call writes both the latest log and a
 timestamped copy under `field_runs/<run>/logs/`.
 
+The GPU wrapper defaults the initial GG-CNN grasp crop and untrusted
+cross-view fallback to the overhead view. Wrist data still participates when
+the two calibrated views agree, and the wrist camera remains the pre-descent
+confirmation gate. If the GPU log says `single_wrist:metric_untrusted`, the
+views disagreed too much for safe fusion and the run should be treated as a
+perception fault rather than a reliable object pose.
+
 The board check uses the same GoPro intrinsics and image size as calibration.
 Its `BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX` setting is only the solvePnP
 RANSAC inlier gate for the live verification frame. If the cube or wrist camera

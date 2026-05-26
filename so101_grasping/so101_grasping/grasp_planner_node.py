@@ -498,6 +498,7 @@ class GraspPlannerNode(Node):
                         prompt=prompt,
                         top_k=top_k,
                         confirmation_target=confirmation_target,
+                        planned_stages=selection.planned_stages,
                     )
                     response.executed = executed
                     response.message += f"; {execute_message}"
@@ -1053,6 +1054,8 @@ class GraspPlannerNode(Node):
                 f"(radius={radius:.3f}m > {self._max_grasp_radius_m:.3f}m, "
                 f"pos=({position[0]:.3f},{position[1]:.3f},{position[2]:.3f}))"
             )
+        if self._support_plane_staging_enabled():
+            return None
         if position[2] < -0.08:
             return (
                 f"below z filter "
@@ -1501,6 +1504,64 @@ class GraspPlannerNode(Node):
                 return False, "execution stopped after arm motion: " + " -> ".join(executed_messages)
         return True, " -> ".join(executed_messages)
 
+    def _execute_planned_stages(
+        self,
+        planned_stages: list[PlannedStage],
+        *,
+        prompt: str,
+        top_k: int,
+        executed_messages: list[str],
+        refresh_before_descent: bool,
+        confirmation_target: np.ndarray | None = None,
+    ) -> tuple[bool, str]:
+        reference_wrist_roll = self._current_wrist_roll()
+        for stage in planned_stages:
+            if stage.name.endswith("descent_close"):
+                if refresh_before_descent:
+                    refresh_ok, refresh_message = self._refresh_wrist_confirmation(
+                        prompt,
+                        top_k,
+                        confirmation_target=confirmation_target,
+                    )
+                else:
+                    refresh_ok = True
+                    refresh_message = "wrist confirmation already refreshed before final plan"
+                wrist_ok, wrist_message = self._execution_wrist_cloud_check()
+                executed_messages.append(refresh_message)
+                if not refresh_ok:
+                    return (
+                        False,
+                        "execution stopped before descent/close: "
+                        + " -> ".join(executed_messages + [wrist_message]),
+                    )
+                if not wrist_ok:
+                    return (
+                        False,
+                        "execution stopped before descent/close: "
+                        + " -> ".join(executed_messages + [wrist_message]),
+                    )
+
+            plan_result = stage.result
+            wrist_delta = self._trajectory_wrist_roll_delta(plan_result, reference_wrist_roll)
+            wrist_reject_reason = self._wrist_roll_reject_reason(wrist_delta)
+            if wrist_reject_reason is not None:
+                return False, f"execution stopped at {stage.name}: preplanned {wrist_reject_reason}"
+            wrist_note = self._wrist_roll_note(wrist_delta)
+            expected_state = self._state_from_plan_end(plan_result, self._current_robot_state())
+            self.get_logger().info(f"Executing preplanned SO-101 grasp stage: {stage.name}{wrist_note}")
+            execute_result = self._moveit.execute(plan_result.trajectory, controllers=[])
+            if execute_result is False:
+                return False, f"execution stopped at {stage.name}: MoveIt execute returned false"
+
+            if self._post_stage_settle_s > 0.0:
+                time.sleep(self._post_stage_settle_s)
+            verify_ok, verify_message = self._verify_arm_state(expected_state, stage.name)
+            verify_message += wrist_note
+            executed_messages.append(verify_message)
+            if not verify_ok:
+                return False, "execution stopped after arm motion: " + " -> ".join(executed_messages)
+        return True, " -> ".join(executed_messages)
+
     def _execute_primitive(
         self,
         primitive_stages: list[PrimitiveStage],
@@ -1509,6 +1570,7 @@ class GraspPlannerNode(Node):
         top_k: int,
         open_first: bool = True,
         confirmation_target: np.ndarray | None = None,
+        planned_stages: list[PlannedStage] | None = None,
     ) -> tuple[bool, str]:
         executed_messages: list[str] = []
         if open_first:
@@ -1520,14 +1582,24 @@ class GraspPlannerNode(Node):
                 return False, f"execution stopped before arm motion: {open_message}"
             executed_messages.append(f"preopen: {open_message}")
 
-        arm_ok, arm_message = self._execute_arm_stages(
-            primitive_stages,
-            prompt=prompt,
-            top_k=top_k,
-            executed_messages=executed_messages,
-            refresh_before_descent=True,
-            confirmation_target=confirmation_target,
-        )
+        if planned_stages is None:
+            arm_ok, arm_message = self._execute_arm_stages(
+                primitive_stages,
+                prompt=prompt,
+                top_k=top_k,
+                executed_messages=executed_messages,
+                refresh_before_descent=True,
+                confirmation_target=confirmation_target,
+            )
+        else:
+            arm_ok, arm_message = self._execute_planned_stages(
+                planned_stages,
+                prompt=prompt,
+                top_k=top_k,
+                executed_messages=executed_messages,
+                refresh_before_descent=True,
+                confirmation_target=confirmation_target,
+            )
         if not arm_ok:
             return False, arm_message
 
@@ -1687,6 +1759,7 @@ class GraspPlannerNode(Node):
             prompt=prompt,
             top_k=refine_top_k,
             open_first=False,
+            planned_stages=refined_selection.planned_stages,
         )
         prefix = (
             "wrist-refined grasp: "

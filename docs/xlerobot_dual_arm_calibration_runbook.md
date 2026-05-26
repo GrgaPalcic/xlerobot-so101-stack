@@ -1209,6 +1209,12 @@ the original target, but the planner does not switch to the refreshed wrist
 target. The wrapper preserves timestamped copies of `detect`, `plan`, and
 `execute` service logs in addition to the latest convenience files.
 
+The GPU wrapper defaults initial GG-CNN grasping and metric-untrusted
+cross-view fallback to the overhead view. Wrist detections are still useful
+when they agree with overhead and for the pre-descent confirmation gate. If the
+GPU log reports `single_wrist:metric_untrusted`, treat that run as a
+perception fault and inspect the masks/depth before executing.
+
 The verification solve still uses the calibrated GoPro intrinsics at the same
 image size. The `BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX` environment variable
 only controls the live solvePnP RANSAC inlier gate. If a cube or wrist camera
