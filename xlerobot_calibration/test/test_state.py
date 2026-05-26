@@ -1,5 +1,6 @@
 from argparse import Namespace
 import json
+import math
 from pathlib import Path
 
 import yaml
@@ -8,6 +9,7 @@ from xlerobot_calibration.board_presets import apply_board_preset, preset_names
 from xlerobot_calibration.cli import resolve_existing_state
 from xlerobot_calibration.report import write_report
 from xlerobot_calibration.runner import (
+    _grasp_support_plane_params,
     build_touch_jog_commands,
     build_vision_handeye_commands,
     generate_controller_configs,
@@ -36,6 +38,32 @@ def test_generate_world_files(tmp_path: Path):
     artifacts = generate_world_files(state)
     assert {path.name for path in artifacts} == {"world_board_identity.yaml", "world_support_plane.yaml"}
     assert all(path.exists() for path in artifacts)
+
+
+def test_grasp_support_plane_params_uses_run_plane(tmp_path: Path):
+    out = tmp_path / "run"
+    extrinsics = out / "extrinsics"
+    extrinsics.mkdir(parents=True)
+    (extrinsics / "world_support_plane.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "points_xyz_in_base": {
+                    "top_left": [1.0, 2.0, 0.1],
+                    "bottom_left": [1.0, 3.0, 0.2],
+                    "bottom_right": [2.0, 3.0, 0.2],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    point, normal = _grasp_support_plane_params(out)
+
+    assert point == [1.0, 2.0, 0.1]
+    expected_norm = math.sqrt(1.01)
+    assert math.isclose(normal[0], 0.0)
+    assert math.isclose(normal[1], -0.1 / expected_norm)
+    assert math.isclose(normal[2], 1.0 / expected_norm)
 
 
 def test_generate_controller_configs(tmp_path: Path):
@@ -305,5 +333,10 @@ def test_generate_grasp_runtime_config(tmp_path: Path):
     planner = left_grasp["/left_grasp/grasp_planner_node"]["ros__parameters"]
     assert planner["arm_base_frame"] == "left/base_link"
     assert planner["joint_states_topic"] == "/left/joint_states"
+    assert planner["use_support_plane_staging"] is True
+    assert planner["support_plane_frame"] == "world"
+    assert planner["support_plane_point_xyz"] == [0.0, 0.0, 0.0]
+    assert planner["support_plane_normal_xyz"] == [0.0, 0.0, 1.0]
+    assert planner["close_surface_clearance_m"] == 0.003
     assert "left/arm_trajectory_controller" in (out / "config/left_moveit_controllers.yaml").read_text()
     assert "/left/joint_states" in (out / "config/left_moveit_py_config.yaml").read_text()
