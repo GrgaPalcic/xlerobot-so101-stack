@@ -93,6 +93,13 @@ start_stack() {
       use_rviz:=false
   ) >"${LOG_DIR}/${side}_grasp_stack.log" 2>&1 &
   echo $! > "${PID_DIR}/grasp_${side}.pid"
+  sleep 3
+  if ! kill -0 "$(cat "${PID_DIR}/grasp_${side}.pid")" 2>/dev/null; then
+    echo "${side} grasp stack exited during startup; tail follows:" >&2
+    tail -80 "${LOG_DIR}/${side}_grasp_stack.log" >&2 || true
+    rm -f "${PID_DIR}/grasp_${side}.pid"
+    exit 1
+  fi
   echo "started ${side} grasp stack: pid $(cat "${PID_DIR}/grasp_${side}.pid")"
   echo "log: ${LOG_DIR}/${side}_grasp_stack.log"
 }

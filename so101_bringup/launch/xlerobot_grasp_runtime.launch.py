@@ -13,7 +13,6 @@ from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterValue
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
@@ -50,6 +49,7 @@ def _runtime_nodes(context):
     out_dir = Path(LaunchConfiguration("out_dir").perform(context))
     grasp_server_address = LaunchConfiguration("grasp_server_address").perform(context)
     allow_execution = LaunchConfiguration("allow_execution").perform(context)
+    allow_execution_bool = allow_execution.strip().lower() in {"1", "true", "yes", "on"}
     use_rviz = LaunchConfiguration("use_rviz").perform(context)
 
     if side not in {"left", "right"}:
@@ -141,7 +141,7 @@ def _runtime_nodes(context):
         parameters=[
             moveit_config.to_dict(),
             grasp_runtime_params,
-            {"allow_execution": ParameterValue(allow_execution, value_type=bool)},
+            {"allow_execution": allow_execution_bool},
         ],
         output="screen",
     )
