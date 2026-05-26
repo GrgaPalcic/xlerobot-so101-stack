@@ -9,6 +9,7 @@ DELL_RUN="${DELL_RUN:-${DELL_WS}/field_runs/xlerobot_${RUN_ID}}"
 GPU_RUN="${GPU_RUN:-${REPO_ROOT}/field_runs/xlerobot_${RUN_ID}}"
 LOG_DIR="${LOG_DIR:-${GPU_RUN}/logs}"
 PID_DIR="${PID_DIR:-${GPU_RUN}/pids}"
+USE_SYSTEMD="${USE_SYSTEMD:-true}"
 
 LOCAL_PORT="${LOCAL_PORT:-8091}"
 REMOTE_PORT="${REMOTE_PORT:-8091}"
@@ -43,6 +44,64 @@ ensure_dirs() {
   mkdir -p "${GPU_RUN}/extrinsics" "${LOG_DIR}" "${PID_DIR}"
 }
 
+truthy() {
+  [[ "$1" == "1" || "$1" == "true" || "$1" == "True" || "$1" == "yes" || "$1" == "on" ]]
+}
+
+write_systemd_units() {
+  local systemd_dir="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
+  mkdir -p "${systemd_dir}"
+  cat >"${systemd_dir}/so101-grasp-server.service" <<EOF
+[Unit]
+Description=SO-101 grasp perception server
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=${REPO_ROOT}
+Environment="REPO_ROOT=${REPO_ROOT}"
+Environment="VENV_PATH=${VENV_PATH}"
+Environment="METRIC_MODEL=${METRIC_MODEL}"
+Environment="GRASP_BACKEND=${GRASP_BACKEND}"
+Environment="GGCNN_PRIMARY_VIEW=${GGCNN_PRIMARY_VIEW}"
+Environment="DA3_CONDITIONING=${DA3_CONDITIONING}"
+Environment="DA3_FALLBACK_INDEPENDENT=${DA3_FALLBACK_INDEPENDENT}"
+Environment="PROCESS_RES=${PROCESS_RES}"
+Environment="CUDA_EMPTY_CACHE=${CUDA_EMPTY_CACHE}"
+Environment="PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF}"
+Environment="WORKSPACE_BOUNDS=${WORKSPACE_BOUNDS}"
+Environment="SUPPORT_PLANE_YAML=${SUPPORT_PLANE_YAML}"
+Environment="HOST=127.0.0.1"
+Environment="PORT=${LOCAL_PORT}"
+ExecStart=${REPO_ROOT}/scripts/run_grasp_server.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+  cat >"${systemd_dir}/so101-grasp-tunnel.service" <<EOF
+[Unit]
+Description=SO-101 reverse SSH tunnel to Dell
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${REPO_ROOT}
+Environment="REMOTE_HOST=${DELL_HOST}"
+Environment="LOCAL_PORT=${LOCAL_PORT}"
+Environment="REMOTE_PORT=${REMOTE_PORT}"
+ExecStart=${REPO_ROOT}/scripts/run_grasp_tunnel.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+  systemctl --user daemon-reload >/dev/null
+}
+
 sync_calib() {
   ensure_dirs
   scp -q "${DELL_HOST}:${DELL_RUN}/extrinsics/world_support_plane.yaml" \
@@ -53,6 +112,24 @@ sync_calib() {
 
 start_server() {
   ensure_dirs
+  if truthy "${USE_SYSTEMD}"; then
+    write_systemd_units
+    if systemctl --user is-active --quiet so101-grasp-server.service; then
+      echo "grasp server already running: systemd so101-grasp-server.service"
+      return
+    fi
+    stop_pid grasp_server
+    stop_stale_server
+    systemctl --user start so101-grasp-server.service
+    sleep 2
+    if ! systemctl --user is-active --quiet so101-grasp-server.service; then
+      echo "grasp server systemd unit failed; journal follows:" >&2
+      journalctl --user -u so101-grasp-server.service -n 120 --no-pager >&2 || true
+      exit 1
+    fi
+    echo "started grasp server: systemd so101-grasp-server.service"
+    return
+  fi
   if [[ -s "${PID_DIR}/grasp_server.pid" ]] && kill -0 "$(cat "${PID_DIR}/grasp_server.pid")" 2>/dev/null; then
     echo "grasp server already running: pid $(cat "${PID_DIR}/grasp_server.pid")"
     return
@@ -78,6 +155,24 @@ start_server() {
 
 start_tunnel() {
   ensure_dirs
+  if truthy "${USE_SYSTEMD}"; then
+    write_systemd_units
+    if systemctl --user is-active --quiet so101-grasp-tunnel.service; then
+      echo "grasp tunnel already running: systemd so101-grasp-tunnel.service"
+      return
+    fi
+    stop_pid grasp_tunnel
+    stop_stale_tunnel
+    systemctl --user start so101-grasp-tunnel.service
+    sleep 2
+    if ! systemctl --user is-active --quiet so101-grasp-tunnel.service; then
+      echo "grasp tunnel systemd unit failed; journal follows:" >&2
+      journalctl --user -u so101-grasp-tunnel.service -n 120 --no-pager >&2 || true
+      exit 1
+    fi
+    echo "started reverse tunnel: systemd so101-grasp-tunnel.service"
+    return
+  fi
   if [[ -s "${PID_DIR}/grasp_tunnel.pid" ]] && kill -0 "$(cat "${PID_DIR}/grasp_tunnel.pid")" 2>/dev/null; then
     echo "grasp tunnel already running: pid $(cat "${PID_DIR}/grasp_tunnel.pid")"
     return
