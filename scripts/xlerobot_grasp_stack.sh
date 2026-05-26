@@ -108,6 +108,7 @@ start_stack() {
   fi
   echo "started ${side} grasp stack: pid $(cat "${PID_DIR}/grasp_${side}.pid")"
   echo "log: ${LOG_DIR}/${side}_grasp_stack.log"
+  wait_for_runtime_tf 45
 }
 
 stop_stack() {
@@ -150,6 +151,58 @@ wait_for_service() {
   done
 }
 
+wait_for_runtime_tf() {
+  source_ros
+  local timeout_s="${1:-45}"
+  python3 - "${side}" "${timeout_s}" <<'PY'
+import sys
+import time
+
+import rclpy
+from rclpy.duration import Duration
+from rclpy.node import Node
+from rclpy.time import Time
+from tf2_ros import Buffer, TransformListener
+
+side = sys.argv[1]
+timeout_s = float(sys.argv[2])
+pairs = [
+    ("world", f"{side}/base_link"),
+    (f"{side}/base_link", f"{side}/gripper_frame_link"),
+    ("world", f"{side}/wrist_camera_optical_frame"),
+    ("world", "center_gopro_optical_frame"),
+]
+
+rclpy.init()
+node = Node(f"wait_{side}_grasp_runtime_tf")
+tf_buffer = Buffer()
+TransformListener(tf_buffer, node)
+deadline = time.monotonic() + timeout_s
+last_errors = {}
+try:
+    while time.monotonic() < deadline:
+        rclpy.spin_once(node, timeout_sec=0.1)
+        ready = True
+        for parent, child in pairs:
+            try:
+                tf_buffer.lookup_transform(parent, child, Time(), timeout=Duration(seconds=0.05))
+            except Exception as exc:  # noqa: BLE001 - print the concrete TF wait reason.
+                last_errors[(parent, child)] = str(exc)
+                ready = False
+                break
+        if ready:
+            print(f"{side} runtime TF ready")
+            raise SystemExit(0)
+    print(f"{side} runtime TF not connected after {timeout_s:.1f}s", file=sys.stderr)
+    for parent, child in pairs:
+        print(f"  {parent} <- {child}: {last_errors.get((parent, child), 'not checked')}", file=sys.stderr)
+    raise SystemExit(1)
+finally:
+    node.destroy_node()
+    rclpy.shutdown()
+PY
+}
+
 call_ros_service() {
   local timeout_s="$1"
   local output_path="$2"
@@ -170,6 +223,7 @@ detect() {
   ensure_dirs
   source_ros
   wait_for_service "/${side}_grasp/detect_grasps"
+  wait_for_runtime_tf 20
   call_ros_service "${DETECT_CALL_TIMEOUT_S}" "${LOG_DIR}/${side}_detect_grasps.txt" \
     "/${side}_grasp/detect_grasps" so101_grasp_msgs/srv/DetectGrasps \
     "{prompt: '${prompt}', top_k: ${DEFAULT_TOP_K}}"
@@ -179,6 +233,7 @@ plan() {
   ensure_dirs
   source_ros
   wait_for_service "/${side}_grasp/plan_grasp"
+  wait_for_runtime_tf 20
   call_ros_service "${PLAN_CALL_TIMEOUT_S}" "${LOG_DIR}/${side}_plan_grasp.txt" \
     "/${side}_grasp/plan_grasp" so101_grasp_msgs/srv/PlanGrasp \
     "{prompt: '${prompt}', top_k: ${DEFAULT_TOP_K}, grasp_index: 0, execute: false, pregrasp_offset_m: 0.10, plan_time_s: 30.0}"
@@ -288,6 +343,7 @@ execute_grasp() {
   fi
   source_ros
   wait_for_service "/${side}_grasp/plan_grasp"
+  wait_for_runtime_tf 20
   ros2 param set "/${side}_grasp/grasp_planner_node" allow_execution true >/dev/null
   trap 'ros2 param set "/'"${side}"'_grasp/grasp_planner_node" allow_execution false >/dev/null 2>&1 || true' EXIT
   call_ros_service "${EXECUTE_CALL_TIMEOUT_S}" "${LOG_DIR}/${side}_execute_grasp.txt" \
@@ -300,6 +356,7 @@ execute_grasp() {
 snapshot() {
   ensure_dirs
   source_ros
+  wait_for_runtime_tf 20
   python3 "${XLEROBOT_WS}/scripts/capture_stack_layers.py" \
     --side "${side}" \
     --prompt "${prompt}" \
