@@ -31,6 +31,12 @@ from tf_transformations import quaternion_from_euler, quaternion_from_matrix, qu
 from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
+from so101_grasping.grasp_staging import (
+    SurfaceRelativeStages,
+    normalize_vector,
+    signed_plane_distance,
+    surface_relative_stages,
+)
 from so101_grasp_msgs.msg import GraspCandidate
 from so101_grasp_msgs.srv import DetectGrasps, PlanGrasp
 
@@ -146,6 +152,11 @@ class GraspPlannerNode(Node):
         self.declare_parameter("min_ready_z_m", 0.130)
         self.declare_parameter("min_pregrasp_z_m", 0.075)
         self.declare_parameter("min_close_z_m", 0.032)
+        self.declare_parameter("use_support_plane_staging", False)
+        self.declare_parameter("support_plane_frame", "world")
+        self.declare_parameter("support_plane_point_xyz", [0.0, 0.0, 0.0])
+        self.declare_parameter("support_plane_normal_xyz", [0.0, 0.0, 1.0])
+        self.declare_parameter("close_surface_clearance_m", 0.003)
         self.declare_parameter("gripper_action", "/follower/gripper_controller/gripper_cmd")
         self.declare_parameter("gripper_open_position", 0.45)
         self.declare_parameter("gripper_closed_position", -0.50)
@@ -207,6 +218,19 @@ class GraspPlannerNode(Node):
         self._min_ready_z_m = float(self.get_parameter("min_ready_z_m").value)
         self._min_pregrasp_z_m = float(self.get_parameter("min_pregrasp_z_m").value)
         self._min_close_z_m = float(self.get_parameter("min_close_z_m").value)
+        self._use_support_plane_staging = bool(self.get_parameter("use_support_plane_staging").value)
+        self._support_plane_frame = str(self.get_parameter("support_plane_frame").value)
+        self._support_plane_point_xyz = np.asarray(
+            self.get_parameter("support_plane_point_xyz").value,
+            dtype=np.float64,
+        )
+        self._support_plane_normal_xyz = normalize_vector(
+            np.asarray(self.get_parameter("support_plane_normal_xyz").value, dtype=np.float64)
+        )
+        self._close_surface_clearance_m = max(
+            0.0,
+            float(self.get_parameter("close_surface_clearance_m").value),
+        )
         self._gripper_open_position = float(self.get_parameter("gripper_open_position").value)
         self._gripper_closed_position = float(self.get_parameter("gripper_closed_position").value)
         self._gripper_open_allow_stall = bool(self.get_parameter("gripper_open_allow_stall").value)
@@ -468,10 +492,12 @@ class GraspPlannerNode(Node):
                     response.executed = executed
                     response.message += f"; {execute_message}"
                 else:
+                    confirmation_target, _, _ = _pose_to_numpy(selection.grasp.pose)
                     executed, execute_message = self._execute_primitive(
                         selection.primitive_stages,
                         prompt=prompt,
                         top_k=top_k,
+                        confirmation_target=confirmation_target,
                     )
                     response.executed = executed
                     response.message += f"; {execute_message}"
@@ -598,7 +624,7 @@ class GraspPlannerNode(Node):
                         planned_stages=planned_stages,
                         primitive_stages=pose_stages,
                         strategy_label=option_label,
-                        message=message + wrist_note,
+                        message=message + self._close_target_note(pose_stages) + wrist_note,
                         wrist_roll_delta_rad=wrist_delta,
                     )
                     if not self._prefer_low_wrist_roll_enabled() or wrist_delta is None:
@@ -730,6 +756,81 @@ class GraspPlannerNode(Node):
             kept.append(grasp)
         return kept, rejected
 
+    def _support_plane_staging_enabled(self) -> bool:
+        self._use_support_plane_staging = bool(self.get_parameter("use_support_plane_staging").value)
+        return self._use_support_plane_staging
+
+    def _support_plane_in_arm_base(self) -> tuple[np.ndarray, np.ndarray]:
+        self._support_plane_frame = str(self.get_parameter("support_plane_frame").value)
+        self._support_plane_point_xyz = np.asarray(
+            self.get_parameter("support_plane_point_xyz").value,
+            dtype=np.float64,
+        )
+        self._support_plane_normal_xyz = normalize_vector(
+            np.asarray(self.get_parameter("support_plane_normal_xyz").value, dtype=np.float64)
+        )
+        target_from_plane = self._frame_transform(self._arm_base_frame, self._support_plane_frame)
+        point_hom = np.r_[self._support_plane_point_xyz, 1.0]
+        point = (target_from_plane @ point_hom)[:3]
+        normal = normalize_vector(target_from_plane[:3, :3] @ self._support_plane_normal_xyz)
+        return point.astype(np.float64), normal.astype(np.float64)
+
+    def _surface_relative_stages(
+        self,
+        target: np.ndarray,
+        *,
+        ready_clearance_m: float,
+        pregrasp_clearance_m: float,
+    ) -> SurfaceRelativeStages | None:
+        if not self._support_plane_staging_enabled():
+            return None
+        plane_point, plane_normal = self._support_plane_in_arm_base()
+        self._close_surface_clearance_m = max(
+            0.0,
+            float(self.get_parameter("close_surface_clearance_m").value),
+        )
+        return surface_relative_stages(
+            target,
+            plane_point,
+            plane_normal,
+            ready_clearance_m=ready_clearance_m,
+            pregrasp_clearance_m=pregrasp_clearance_m,
+            close_clearance_m=self._close_clearance_m,
+            close_surface_clearance_m=self._close_surface_clearance_m,
+        )
+
+    def _legacy_pregrasp_close(self, target: np.ndarray, *, pregrasp_clearance_m: float) -> tuple[np.ndarray, np.ndarray]:
+        pregrasp = target.copy()
+        close = target.copy()
+        pregrasp[2] = max(float(target[2] + pregrasp_clearance_m), self._min_pregrasp_z_m)
+        close[2] = max(float(target[2] + self._close_clearance_m), self._min_close_z_m)
+        return pregrasp, close
+
+    def _close_target_note(self, stages: list[PrimitiveStage]) -> str:
+        close_stage = next(
+            (stage for stage in reversed(stages) if stage.pose is not None and stage.name.endswith("descent_close")),
+            None,
+        )
+        if close_stage is None or close_stage.pose is None:
+            return ""
+        position = np.asarray(
+            [
+                close_stage.pose.pose.position.x,
+                close_stage.pose.pose.position.y,
+                close_stage.pose.pose.position.z,
+            ],
+            dtype=np.float64,
+        )
+        note = f"; close_target=({position[0]:.3f},{position[1]:.3f},{position[2]:.3f})"
+        if self._support_plane_staging_enabled():
+            try:
+                plane_point, plane_normal = self._support_plane_in_arm_base()
+                clearance = signed_plane_distance(position, plane_point, plane_normal)
+                note += f"; surface_clearance={clearance:.3f}m"
+            except Exception as exc:  # noqa: BLE001 - planning already succeeded; keep the response usable.
+                note += f"; surface_clearance=unavailable({exc})"
+        return note
+
     def _target_position_options(self, grasp: GraspCandidate) -> list[tuple[str, np.ndarray]]:
         grasp_position, _, _ = _pose_to_numpy(grasp.pose)
         source_label = str(grasp.source).strip().lower() or "grasp"
@@ -830,16 +931,27 @@ class GraspPlannerNode(Node):
         orientation_options = self._grasp_orientation_options(rotation)
         for target_label, target in target_options:
             for orientation_label, quat in orientation_options:
-                pregrasp = target.copy()
-                close = target.copy()
-                pregrasp[2] = max(float(target[2] + pregrasp_clearance), self._min_pregrasp_z_m)
-                close[2] = max(float(target[2] + self._close_clearance_m), self._min_close_z_m)
+                surface_stages = self._surface_relative_stages(
+                    target,
+                    ready_clearance_m=self._ready_clearance_m,
+                    pregrasp_clearance_m=pregrasp_clearance,
+                )
+                if surface_stages is None:
+                    pregrasp, close = self._legacy_pregrasp_close(
+                        target,
+                        pregrasp_clearance_m=pregrasp_clearance,
+                    )
+                    label = f"{target_label}_{orientation_label}"
+                else:
+                    pregrasp = surface_stages.pregrasp
+                    close = surface_stages.close
+                    label = f"{target_label}_{orientation_label}_surface"
                 stages = [
                     *self._initial_ready_stages(),
                     PrimitiveStage("pregrasp_align", pose=self._make_pose(pregrasp, quat)),
                     PrimitiveStage("descent_close", pose=self._make_pose(close, quat)),
                 ]
-                options.append((f"{target_label}_{orientation_label}", stages))
+                options.append((label, stages))
         return options
 
     def _make_ggcnn_planar_primitive_options(
@@ -856,19 +968,31 @@ class GraspPlannerNode(Node):
         target_options = self._prefer_cloud_targets(self._target_position_options(grasp))
         for target_label, target in target_options:
             for orientation_label, quat in orientation_options:
-                ready = target.copy()
-                pregrasp = target.copy()
-                close = target.copy()
-                ready[2] = max(float(target[2] + self._ready_clearance_m), self._min_ready_z_m)
-                pregrasp[2] = max(float(target[2] + pregrasp_clearance), self._min_pregrasp_z_m)
-                close[2] = max(float(target[2] + self._close_clearance_m), self._min_close_z_m)
+                surface_stages = self._surface_relative_stages(
+                    target,
+                    ready_clearance_m=self._ready_clearance_m,
+                    pregrasp_clearance_m=pregrasp_clearance,
+                )
+                if surface_stages is None:
+                    ready = target.copy()
+                    ready[2] = max(float(target[2] + self._ready_clearance_m), self._min_ready_z_m)
+                    pregrasp, close = self._legacy_pregrasp_close(
+                        target,
+                        pregrasp_clearance_m=pregrasp_clearance,
+                    )
+                    label = f"ggcnn_planar_{target_label}_{orientation_label}"
+                else:
+                    ready = surface_stages.ready
+                    pregrasp = surface_stages.pregrasp
+                    close = surface_stages.close
+                    label = f"ggcnn_planar_{target_label}_{orientation_label}_surface"
                 stages = [
                     *self._initial_ready_stages(),
                     PrimitiveStage("ggcnn_ready_over_object", pose=self._make_pose(ready, quat)),
                     PrimitiveStage("ggcnn_pregrasp_align", pose=self._make_pose(pregrasp, quat)),
                     PrimitiveStage("ggcnn_descent_close", pose=self._make_pose(close, quat)),
                 ]
-                options.append((f"ggcnn_planar_{target_label}_{orientation_label}", stages))
+                options.append((label, stages))
         return options
 
     def _normalize_angle(self, radians: float) -> float:
@@ -1322,17 +1446,28 @@ class GraspPlannerNode(Node):
         top_k: int,
         executed_messages: list[str],
         refresh_before_descent: bool,
+        confirmation_target: np.ndarray | None = None,
     ) -> tuple[bool, str]:
         reference_wrist_roll = self._current_wrist_roll()
         for stage in stages:
             if stage.name.endswith("descent_close"):
-                refresh_message = (
-                    self._refresh_wrist_confirmation(prompt, top_k)
-                    if refresh_before_descent
-                    else "wrist confirmation already refreshed before final plan"
-                )
+                if refresh_before_descent:
+                    refresh_ok, refresh_message = self._refresh_wrist_confirmation(
+                        prompt,
+                        top_k,
+                        confirmation_target=confirmation_target,
+                    )
+                else:
+                    refresh_ok = True
+                    refresh_message = "wrist confirmation already refreshed before final plan"
                 wrist_ok, wrist_message = self._execution_wrist_cloud_check()
                 executed_messages.append(refresh_message)
+                if not refresh_ok:
+                    return (
+                        False,
+                        "execution stopped before descent/close: "
+                        + " -> ".join(executed_messages + [wrist_message]),
+                    )
                 if not wrist_ok:
                     return (
                         False,
@@ -1373,6 +1508,7 @@ class GraspPlannerNode(Node):
         prompt: str,
         top_k: int,
         open_first: bool = True,
+        confirmation_target: np.ndarray | None = None,
     ) -> tuple[bool, str]:
         executed_messages: list[str] = []
         if open_first:
@@ -1390,6 +1526,7 @@ class GraspPlannerNode(Node):
             top_k=top_k,
             executed_messages=executed_messages,
             refresh_before_descent=True,
+            confirmation_target=confirmation_target,
         )
         if not arm_ok:
             return False, arm_message
@@ -1559,16 +1696,40 @@ class GraspPlannerNode(Node):
         )
         return final_ok, prefix + final_message, refined_selection
 
-    def _refresh_wrist_confirmation(self, prompt: str, top_k: int) -> str:
+    def _refresh_wrist_confirmation(
+        self,
+        prompt: str,
+        top_k: int,
+        *,
+        confirmation_target: np.ndarray | None,
+    ) -> tuple[bool, str]:
         if not bool(self.get_parameter("require_wrist_cloud_for_execution").value):
-            return "wrist confirmation skipped; wrist-cloud execution gate disabled"
+            return True, "wrist confirmation skipped; wrist-cloud execution gate disabled"
         try:
             response = self._detect_grasps(prompt, top_k)
         except Exception as exc:  # noqa: BLE001 - return as execution audit detail.
-            return f"wrist confirmation refresh failed: {exc}"
+            return False, f"wrist confirmation refresh failed: {exc}"
         if not bool(response.success):
-            return f"wrist confirmation refresh failed: {response.message}"
-        return f"wrist confirmation refreshed: {len(response.grasps)} candidate(s)"
+            return False, f"wrist confirmation refresh failed: {response.message}"
+        if confirmation_target is None:
+            return True, f"wrist confirmation refreshed: {len(response.grasps)} candidate(s)"
+        try:
+            refreshed_grasps = [self._grasp_to_arm_base(grasp) for grasp in response.grasps]
+        except Exception as exc:  # noqa: BLE001 - report the concrete TF issue.
+            return False, f"wrist confirmation transform failed: {exc}"
+        matched, rejected = self._filter_wrist_refine_candidates(refreshed_grasps, confirmation_target)
+        if not matched:
+            reason = "; ".join(rejected[:6]) if rejected else "no candidates after same-object gate"
+            return (
+                False,
+                f"wrist confirmation found {len(response.grasps)} candidate(s), "
+                f"but none matched initial target: {reason}",
+            )
+        return (
+            True,
+            f"wrist confirmation matched {len(matched)}/{len(response.grasps)} candidate(s) "
+            "near initial target",
+        )
 
     def _publish_display_trajectories(self, trajectories: list[Any]) -> None:
         msg = DisplayTrajectory()

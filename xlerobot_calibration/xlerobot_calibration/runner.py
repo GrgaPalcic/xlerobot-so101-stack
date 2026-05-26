@@ -1223,6 +1223,37 @@ def generate_camera_config(state: dict[str, Any]) -> list[Path]:
     return [params_path, cameras_path]
 
 
+def _grasp_support_plane_params(out: Path) -> tuple[list[float], list[float]]:
+    support_path = out / "extrinsics" / "world_support_plane.yaml"
+    if not support_path.exists():
+        return [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]
+    data = yaml.safe_load(support_path.read_text(encoding="utf-8")) or {}
+    points = data.get("points_xyz_in_base", {})
+    try:
+        top_left = [float(value) for value in points["top_left"]]
+        bottom_left = [float(value) for value in points["bottom_left"]]
+        bottom_right = [float(value) for value in points["bottom_right"]]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise StepError(f"invalid support plane file for grasp runtime: {support_path}") from exc
+    if len(top_left) != 3 or len(bottom_left) != 3 or len(bottom_right) != 3:
+        raise StepError(f"invalid support plane point length in {support_path}")
+
+    x_axis = [bottom_right[i] - bottom_left[i] for i in range(3)]
+    y_axis = [bottom_left[i] - top_left[i] for i in range(3)]
+    normal = [
+        x_axis[1] * y_axis[2] - x_axis[2] * y_axis[1],
+        x_axis[2] * y_axis[0] - x_axis[0] * y_axis[2],
+        x_axis[0] * y_axis[1] - x_axis[1] * y_axis[0],
+    ]
+    norm = math.sqrt(sum(value * value for value in normal))
+    if norm < 1e-9:
+        raise StepError(f"degenerate support plane in {support_path}")
+    normal = [value / norm for value in normal]
+    if normal[2] < 0.0:
+        normal = [-value for value in normal]
+    return top_left, normal
+
+
 def generate_grasp_runtime_config(state: dict[str, Any]) -> list[Path]:
     cfg = state["config"]
     out = Path(state["out_dir"])
@@ -1237,6 +1268,7 @@ def generate_grasp_runtime_config(state: dict[str, Any]) -> list[Path]:
     default_server = str(cfg.get("grasp_server_address", "127.0.0.1:8091"))
     default_prompt = str(cfg.get("prompt", "pink cube"))
     default_top_k = int(cfg.get("top_k", 8))
+    support_plane_point, support_plane_normal = _grasp_support_plane_params(out)
 
     for side in ("left", "right"):
         wrist_yaml = out / "extrinsics" / f"{side}_wrist_camera_in_gripper.yaml"
@@ -1290,6 +1322,11 @@ def generate_grasp_runtime_config(state: dict[str, Any]) -> list[Path]:
                     "prefer_low_wrist_roll": True,
                     "preferred_wrist_roll_delta_rad": 0.35,
                     "max_wrist_roll_delta_rad": 0.90,
+                    "use_support_plane_staging": True,
+                    "support_plane_frame": "world",
+                    "support_plane_point_xyz": support_plane_point,
+                    "support_plane_normal_xyz": support_plane_normal,
+                    "close_surface_clearance_m": 0.003,
                     "require_wrist_cloud_for_execution": True,
                     "wrist_refine_before_grasp": False,
                     "wrist_refine_max_xy_shift_m": 0.08,

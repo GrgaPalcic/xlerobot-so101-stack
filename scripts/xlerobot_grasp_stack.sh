@@ -211,9 +211,20 @@ call_ros_service() {
   local timeout_s="$1"
   local output_path="$2"
   shift 2
+  local stamp archive_path
+  local -a tee_paths
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  archive_path="${output_path}"
+  if [[ "${output_path}" == *.txt ]]; then
+    archive_path="${output_path%.txt}_${stamp}.txt"
+  fi
+  tee_paths=("${output_path}")
+  if [[ "${archive_path}" != "${output_path}" ]]; then
+    tee_paths+=("${archive_path}")
+  fi
   local rc
   set +e
-  timeout --foreground "${timeout_s}" ros2 service call "$@" | tee "${output_path}"
+  timeout --foreground "${timeout_s}" ros2 service call "$@" | tee "${tee_paths[@]}"
   rc=${PIPESTATUS[0]}
   set -e
   if (( rc != 0 )); then

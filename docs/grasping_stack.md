@@ -63,6 +63,13 @@ The runtime also skips the MoveIt named `zero` pose by default. Plans start
 from the live joint state and go directly toward the over-object/pregrasp
 sequence, avoiding a large detour through an arbitrary canonical pose.
 
+Close height is surface-relative in calibrated runtime. The planner transforms
+the per-run `world_support_plane.yaml` into the active arm base frame, stages
+ready/pregrasp/descent along that plane normal, and does not apply a fixed
+arm-base `min_close_z_m` floor. This matters because the carriage and arm base
+move relative to different tables; update the support plane when the object
+surface changes.
+
 The planner scores feasible primitive options by actual planned `wrist_roll`
 movement and keeps searching until it finds a low-roll option. The default
 preferred roll change is `0.35` rad, with a hard guard at `0.90` rad to avoid
@@ -76,6 +83,12 @@ if they move more than the configured same-object gate
 (`wrist_refine_max_xy_shift_m`, `wrist_refine_max_z_shift_m`) from the initial
 target. This prevents the wrist camera from latching onto pink arm parts or
 other distractors after the view move.
+
+The wrist view is also used as a confirmation gate before descent. A refreshed
+wrist detection must remain near the original target; the runtime does not
+switch to the refreshed wrist target unless `WRIST_REFINE_BEFORE_GRASP=true`.
+Each `detect`, `plan`, and `execute` call writes both the latest log and a
+timestamped copy under `field_runs/<run>/logs/`.
 
 The board check uses the same GoPro intrinsics and image size as calibration.
 Its `BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX` setting is only the solvePnP
