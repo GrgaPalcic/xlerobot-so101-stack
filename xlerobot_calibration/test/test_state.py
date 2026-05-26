@@ -38,6 +38,8 @@ def test_generate_world_files(tmp_path: Path):
     artifacts = generate_world_files(state)
     assert {path.name for path in artifacts} == {"world_board_identity.yaml", "world_support_plane.yaml"}
     assert all(path.exists() for path in artifacts)
+    support = yaml.safe_load((Path(state["out_dir"]) / "extrinsics/world_support_plane.yaml").read_text())
+    assert support["normal_xyz_in_base"] == [0.0, 0.0, -1.0]
 
 
 def test_grasp_support_plane_params_uses_run_plane(tmp_path: Path):
@@ -336,7 +338,7 @@ def test_generate_grasp_runtime_config(tmp_path: Path):
     assert planner["use_support_plane_staging"] is True
     assert planner["support_plane_frame"] == "world"
     assert planner["support_plane_point_xyz"] == [0.0, 0.0, 0.0]
-    assert planner["support_plane_normal_xyz"] == [0.0, 0.0, 1.0]
+    assert planner["support_plane_normal_xyz"] == [0.0, 0.0, -1.0]
     assert planner["close_surface_clearance_m"] == 0.003
     assert "left/arm_trajectory_controller" in (out / "config/left_moveit_controllers.yaml").read_text()
     assert "/left/joint_states" in (out / "config/left_moveit_py_config.yaml").read_text()

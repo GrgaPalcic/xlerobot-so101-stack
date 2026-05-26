@@ -1102,7 +1102,11 @@ def generate_world_files(state: dict[str, Any]) -> list[Path]:
             "bottom_left": [0.0, height, 0.0],
             "bottom_right": [width, height, 0.0],
         },
-        "note": "World support plane. Valid only if the fixed target plane is the object support plane.",
+        "normal_xyz_in_base": [0.0, 0.0, -1.0],
+        "note": (
+            "World support plane. Valid only if the fixed target plane is the object support plane. "
+            "The normal points toward the cameras/arms for OpenCV board coordinates."
+        ),
     }
     identity_path = out_dir / "world_board_identity.yaml"
     support_path = out_dir / "world_support_plane.yaml"
@@ -1226,7 +1230,7 @@ def generate_camera_config(state: dict[str, Any]) -> list[Path]:
 def _grasp_support_plane_params(out: Path) -> tuple[list[float], list[float]]:
     support_path = out / "extrinsics" / "world_support_plane.yaml"
     if not support_path.exists():
-        return [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]
+        return [0.0, 0.0, 0.0], [0.0, 0.0, -1.0]
     data = yaml.safe_load(support_path.read_text(encoding="utf-8")) or {}
     points = data.get("points_xyz_in_base", {})
     try:
@@ -1237,6 +1241,19 @@ def _grasp_support_plane_params(out: Path) -> tuple[list[float], list[float]]:
         raise StepError(f"invalid support plane file for grasp runtime: {support_path}") from exc
     if len(top_left) != 3 or len(bottom_left) != 3 or len(bottom_right) != 3:
         raise StepError(f"invalid support plane point length in {support_path}")
+
+    explicit_normal = data.get("normal_xyz_in_base")
+    if explicit_normal is not None:
+        try:
+            normal = [float(value) for value in explicit_normal]
+        except (TypeError, ValueError) as exc:
+            raise StepError(f"invalid support plane normal in {support_path}") from exc
+        if len(normal) != 3:
+            raise StepError(f"invalid support plane normal length in {support_path}")
+        norm = math.sqrt(sum(value * value for value in normal))
+        if norm < 1e-9:
+            raise StepError(f"degenerate support plane normal in {support_path}")
+        return top_left, [value / norm for value in normal]
 
     x_axis = [bottom_right[i] - bottom_left[i] for i in range(3)]
     y_axis = [bottom_left[i] - top_left[i] for i in range(3)]
@@ -1249,8 +1266,6 @@ def _grasp_support_plane_params(out: Path) -> tuple[list[float], list[float]]:
     if norm < 1e-9:
         raise StepError(f"degenerate support plane in {support_path}")
     normal = [value / norm for value in normal]
-    if normal[2] < 0.0:
-        normal = [-value for value in normal]
     return top_left, normal
 
 

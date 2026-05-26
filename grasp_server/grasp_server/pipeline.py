@@ -365,13 +365,14 @@ def _load_support_plane(path: str) -> SupportPlane | None:
     except KeyError as exc:
         raise DependencyError(f"Invalid support-plane calibration file: missing {exc}") from exc
 
-    normal = np.cross(bottom_left - top_left, bottom_right - bottom_left).astype(np.float32)
+    if "normal_xyz_in_base" in data:
+        normal = np.asarray(data["normal_xyz_in_base"], dtype=np.float32)
+    else:
+        normal = np.cross(bottom_left - top_left, bottom_right - bottom_left).astype(np.float32)
     norm = float(np.linalg.norm(normal))
     if not np.isfinite(norm) or norm < 1e-6:
         raise DependencyError(f"Invalid support-plane calibration file: degenerate plane in {plane_path}")
     normal /= norm
-    if normal[2] < 0.0:
-        normal *= -1.0
     LOG.info(
         "Loaded support plane from %s: point=(%.3f, %.3f, %.3f), normal=(%.3f, %.3f, %.3f)",
         plane_path,
