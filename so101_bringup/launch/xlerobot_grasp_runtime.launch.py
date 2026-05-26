@@ -92,10 +92,8 @@ def _runtime_nodes(context):
     )
 
     static_tf_specs = [
-        ("world_to_left_base", extrinsics_dir / "world_to_left_base.yaml", None),
-        ("world_to_right_base", extrinsics_dir / "world_to_right_base.yaml", None),
-        ("left_wrist_camera", extrinsics_dir / "left_wrist_camera_in_gripper.yaml", None),
-        ("right_wrist_camera", extrinsics_dir / "right_wrist_camera_in_gripper.yaml", None),
+        (f"world_to_{side}_base", extrinsics_dir / f"world_to_{side}_base.yaml", None),
+        (f"{side}_wrist_camera", extrinsics_dir / f"{side}_wrist_camera_in_gripper.yaml", None),
         ("center_gopro", extrinsics_dir / "center_gopro_in_world.yaml", None),
         ("moveit_world_to_base", extrinsics_dir / f"world_to_{side}_base.yaml", "base_link"),
     ]
