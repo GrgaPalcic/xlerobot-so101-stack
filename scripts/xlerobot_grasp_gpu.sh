@@ -80,6 +80,12 @@ start_tunnel() {
     echo "grasp tunnel already running: pid $(cat "${PID_DIR}/grasp_tunnel.pid")"
     return
   fi
+  if pgrep -af "ssh .* -R ${REMOTE_PORT}:127.0.0.1:${LOCAL_PORT}" >/dev/null 2>&1; then
+    echo "stopping stale reverse tunnel for remote port ${REMOTE_PORT}:"
+    pgrep -af "ssh .* -R ${REMOTE_PORT}:127.0.0.1:${LOCAL_PORT}" || true
+    stop_stale_tunnel
+    sleep 1
+  fi
   ssh -N -T \
     -o ExitOnForwardFailure=yes \
     -o ServerAliveInterval=30 \
@@ -87,6 +93,13 @@ start_tunnel() {
     -R "${REMOTE_PORT}:127.0.0.1:${LOCAL_PORT}" \
     "${DELL_HOST}" >"${LOG_DIR}/grasp_tunnel.log" 2>&1 &
   echo $! > "${PID_DIR}/grasp_tunnel.pid"
+  sleep 1
+  if ! kill -0 "$(cat "${PID_DIR}/grasp_tunnel.pid")" 2>/dev/null; then
+    echo "reverse tunnel exited during startup; tail follows:" >&2
+    tail -80 "${LOG_DIR}/grasp_tunnel.log" >&2 || true
+    rm -f "${PID_DIR}/grasp_tunnel.pid"
+    exit 1
+  fi
   echo "started reverse tunnel: pid $(cat "${PID_DIR}/grasp_tunnel.pid"), log ${LOG_DIR}/grasp_tunnel.log"
 }
 
@@ -109,6 +122,10 @@ stop_stale_server() {
   pkill -f "grasp-server .*--port ${LOCAL_PORT}" 2>/dev/null || true
 }
 
+stop_stale_tunnel() {
+  pkill -f "ssh .* -R ${REMOTE_PORT}:127.0.0.1:${LOCAL_PORT}" 2>/dev/null || true
+}
+
 status() {
   ensure_dirs
   for name in grasp_server grasp_tunnel; do
@@ -121,6 +138,10 @@ status() {
   if pgrep -af "grasp-server .*--port ${LOCAL_PORT}" >/dev/null 2>&1; then
     echo "port ${LOCAL_PORT} owner(s):"
     pgrep -af "grasp-server .*--port ${LOCAL_PORT}" || true
+  fi
+  if pgrep -af "ssh .* -R ${REMOTE_PORT}:127.0.0.1:${LOCAL_PORT}" >/dev/null 2>&1; then
+    echo "reverse tunnel owner(s):"
+    pgrep -af "ssh .* -R ${REMOTE_PORT}:127.0.0.1:${LOCAL_PORT}" || true
   fi
   echo "support plane: ${SUPPORT_PLANE_YAML}"
   command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=memory.used,memory.free --format=csv,noheader,nounits || true
@@ -147,12 +168,14 @@ case "${cmd}" in
     ;;
   down)
     stop_pid grasp_tunnel
+    stop_stale_tunnel
     stop_pid grasp_server
     stop_stale_server
     status
     ;;
   restart)
     stop_pid grasp_tunnel
+    stop_stale_tunnel
     stop_pid grasp_server
     stop_stale_server
     sync_calib
