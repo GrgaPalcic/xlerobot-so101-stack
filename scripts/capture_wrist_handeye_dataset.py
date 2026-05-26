@@ -121,6 +121,7 @@ WEB_UI_HTML = """<!doctype html>
 </main>
 <script>
 let lastSeq = -1;
+let stepInputsInitialized = false;
 async function send(command) {
   await fetch('/api/command', {
     method: 'POST',
@@ -149,9 +150,12 @@ async function refresh() {
   const res = await fetch('/api/state');
   const data = await res.json();
   document.getElementById('status').textContent = data.status || '';
-  if (data.cart_step_m) document.getElementById('cartStep').value = (data.cart_step_m * 1000).toFixed(1);
-  if (data.joint_step_rad) document.getElementById('jointStep').value = (data.joint_step_rad * 180 / Math.PI).toFixed(1);
-  if (data.duration_s) document.getElementById('durationSec').value = Number(data.duration_s).toFixed(1);
+  if (!stepInputsInitialized) {
+    if (data.cart_step_m) document.getElementById('cartStep').value = (data.cart_step_m * 1000).toFixed(1);
+    if (data.joint_step_rad) document.getElementById('jointStep').value = (data.joint_step_rad * 180 / Math.PI).toFixed(1);
+    if (data.duration_s) document.getElementById('durationSec').value = Number(data.duration_s).toFixed(1);
+    stepInputsInitialized = true;
+  }
   if (data.latest_seq !== lastSeq) {
     lastSeq = data.latest_seq;
     document.getElementById('preview').src = `/latest.jpg?seq=${lastSeq}`;
