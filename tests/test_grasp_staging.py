@@ -23,7 +23,7 @@ def test_surface_relative_close_does_not_use_fixed_base_z_floor():
     )
 
     np.testing.assert_allclose(stages.close, target)
-    assert signed_plane_distance(stages.close, plane_point, plane_normal) == 0.003
+    assert np.isclose(signed_plane_distance(stages.close, plane_point, plane_normal), 0.003)
 
 
 def test_surface_relative_close_raises_below_plane_target_only_to_clearance():
@@ -39,7 +39,7 @@ def test_surface_relative_close_raises_below_plane_target_only_to_clearance():
     )
 
     np.testing.assert_allclose(close, [0.18, 0.25, -0.027])
-    assert clearance == 0.003
+    assert np.isclose(clearance, 0.003)
 
 
 def test_surface_relative_ready_and_pregrasp_follow_plane_normal():
