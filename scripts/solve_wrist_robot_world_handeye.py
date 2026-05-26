@@ -253,10 +253,109 @@ def summarize_residuals(rows: list[dict[str, Any]]) -> dict[str, Any]:
     rot = np.asarray([row["rotation_error_deg"] for row in rows], dtype=np.float64)
     return {
         "translation_error_mean_m": float(np.mean(trans)),
+        "translation_error_median_m": float(np.median(trans)),
         "translation_error_max_m": float(np.max(trans)),
         "rotation_error_mean_deg": float(np.mean(rot)),
+        "rotation_error_median_deg": float(np.median(rot)),
         "rotation_error_max_deg": float(np.max(rot)),
     }
+
+
+def robust_residual_threshold(
+    values: np.ndarray,
+    *,
+    max_value: float,
+    mad_multiplier: float,
+    sigma_floor: float,
+) -> tuple[float, float, float]:
+    median = float(np.median(values))
+    mad = float(np.median(np.abs(values - median)))
+    sigma = max(1.4826 * mad, sigma_floor)
+    threshold = min(max_value, median + mad_multiplier * sigma)
+    return threshold, median, sigma
+
+
+def solve_with_residual_filtering(
+    samples: list[dict[str, Any]],
+    *,
+    method: str,
+    min_samples: int,
+    residual_filter: bool,
+    residual_filter_passes: int,
+    max_residual_translation_m: float,
+    max_residual_rotation_deg: float,
+    residual_mad_multiplier: float,
+) -> tuple[np.ndarray, np.ndarray, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    selected = list(samples)
+    residual_rejections: list[dict[str, Any]] = []
+    pass_summaries: list[dict[str, Any]] = []
+    parsed: list[dict[str, Any]] = []
+    t_world_base = np.eye(4, dtype=np.float64)
+    t_camera_gripper = np.eye(4, dtype=np.float64)
+
+    passes = max(1, residual_filter_passes + 1 if residual_filter else 1)
+    for pass_index in range(passes):
+        t_world_base, t_camera_gripper, parsed = solve_handeye(selected, method=method)
+        residuals = residuals_for_solution(parsed, t_world_base, t_camera_gripper)
+        if not residual_filter or pass_index >= residual_filter_passes:
+            break
+
+        trans = np.asarray([row["translation_error_m"] for row in residuals], dtype=np.float64)
+        rot = np.asarray([row["rotation_error_deg"] for row in residuals], dtype=np.float64)
+        trans_threshold, trans_median, trans_sigma = robust_residual_threshold(
+            trans,
+            max_value=max_residual_translation_m,
+            mad_multiplier=residual_mad_multiplier,
+            sigma_floor=0.001,
+        )
+        rot_threshold, rot_median, rot_sigma = robust_residual_threshold(
+            rot,
+            max_value=max_residual_rotation_deg,
+            mad_multiplier=residual_mad_multiplier,
+            sigma_floor=0.10,
+        )
+        reject_names = {
+            row["name"]
+            for row in residuals
+            if row["translation_error_m"] > trans_threshold or row["rotation_error_deg"] > rot_threshold
+        }
+        pass_summaries.append(
+            {
+                "pass": pass_index + 1,
+                "translation_threshold_m": trans_threshold,
+                "translation_median_m": trans_median,
+                "translation_sigma_m": trans_sigma,
+                "rotation_threshold_deg": rot_threshold,
+                "rotation_median_deg": rot_median,
+                "rotation_sigma_deg": rot_sigma,
+                "rejected_names": sorted(reject_names),
+            }
+        )
+        if not reject_names:
+            break
+        remaining = [sample for sample in selected if sample.get("name", "") not in reject_names]
+        if len(remaining) < min_samples:
+            pass_summaries[-1]["fallback"] = (
+                f"kept residual outliers because rejecting them would leave {len(remaining)} samples"
+            )
+            break
+        residual_by_name = {row["name"]: row for row in residuals}
+        for sample in selected:
+            name = sample.get("name", "")
+            if name not in reject_names:
+                continue
+            row = dict(sample)
+            residual = residual_by_name.get(name, {})
+            row["reject_reason"] = (
+                "hand-eye residual "
+                f"{float(residual.get('translation_error_m', 0.0)) * 1000.0:.2f} mm, "
+                f"{float(residual.get('rotation_error_deg', 0.0)):.2f} deg"
+            )
+            row["handeye_residual"] = residual
+            residual_rejections.append(row)
+        selected = remaining
+
+    return t_world_base, t_camera_gripper, parsed, residual_rejections, pass_summaries
 
 
 def write_static_tf_scripts(output_dir: Path) -> list[Path]:
@@ -324,6 +423,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-markers", type=int, default=8)
     parser.add_argument("--max-reproj-px", type=float, default=2.5)
     parser.add_argument("--method", choices=("SHAH", "LI"), default="SHAH")
+    parser.add_argument("--residual-filter", dest="residual_filter", action="store_true", default=True)
+    parser.add_argument("--no-residual-filter", dest="residual_filter", action="store_false")
+    parser.add_argument("--residual-filter-passes", type=int, default=2)
+    parser.add_argument("--max-residual-translation-m", type=float, default=0.015)
+    parser.add_argument("--max-residual-rotation-deg", type=float, default=5.0)
+    parser.add_argument("--residual-mad-multiplier", type=float, default=3.5)
     parser.add_argument("--world-frame", default="world")
     parser.add_argument("--base-frame", default="")
     parser.add_argument("--gripper-frame", default="")
@@ -349,7 +454,18 @@ def main() -> int:
             f"kept {len(kept)} of {len(all_samples)}"
         )
 
-    t_world_base, t_camera_gripper, parsed = solve_handeye(kept, method=args.method)
+    t_world_base, t_camera_gripper, parsed, residual_rejected, residual_filter_passes = solve_with_residual_filtering(
+        kept,
+        method=args.method,
+        min_samples=args.min_samples,
+        residual_filter=args.residual_filter,
+        residual_filter_passes=args.residual_filter_passes,
+        max_residual_translation_m=args.max_residual_translation_m,
+        max_residual_rotation_deg=args.max_residual_rotation_deg,
+        residual_mad_multiplier=args.residual_mad_multiplier,
+    )
+    selected_names = {item["sample"].get("name", "") for item in parsed}
+    selected_samples = [sample for sample in kept if sample.get("name", "") in selected_names]
     t_gripper_camera = invert_transform(t_camera_gripper)
     residuals = residuals_for_solution(parsed, t_world_base, t_camera_gripper)
     residual_summary = summarize_residuals(residuals)
@@ -405,18 +521,25 @@ def main() -> int:
         },
         "counts": {
             "total_samples": len(all_samples),
-            "used_samples": len(kept),
-            "rejected_samples": len(rejected),
+            "used_samples": len(selected_samples),
+            "rejected_samples": len(rejected) + len(residual_rejected),
         },
-        "used_sample_names": [sample.get("name", "") for sample in kept],
+        "used_sample_names": [sample.get("name", "") for sample in selected_samples],
         "rejected_samples": [
             {
                 "name": sample.get("name", ""),
                 "reason": sample.get("reject_reason", ""),
                 "quality": sample.get("quality", {}),
             }
-            for sample in rejected
+            for sample in rejected + residual_rejected
         ],
+        "residual_filter": {
+            "enabled": args.residual_filter,
+            "passes": residual_filter_passes,
+            "max_residual_translation_m": args.max_residual_translation_m,
+            "max_residual_rotation_deg": args.max_residual_rotation_deg,
+            "mad_multiplier": args.residual_mad_multiplier,
+        },
         "residual_summary": residual_summary,
         "residuals": residuals,
         "outputs": {
@@ -431,7 +554,9 @@ def main() -> int:
     static_scripts = write_static_tf_scripts(args.output_dir)
     aggregate_summary = update_aggregate_summary(args.output_dir)
 
-    print(f"{args.side}: used {len(kept)}/{len(all_samples)} samples")
+    print(f"{args.side}: used {len(selected_samples)}/{len(all_samples)} samples")
+    if residual_rejected:
+        print("  residual rejected:", ", ".join(sample.get("name", "") for sample in residual_rejected))
     print(
         "  residual translation mean/max: "
         f"{residual_summary.get('translation_error_mean_m', 0.0) * 1000.0:.2f}/"

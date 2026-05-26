@@ -484,6 +484,27 @@ def write_summary(args: argparse.Namespace, sample_count: int) -> None:
     )
 
 
+def existing_sample_counts(samples_path: Path) -> tuple[int, int]:
+    saved = 0
+    max_index = 0
+    if not samples_path.exists():
+        return saved, max_index
+    for line in samples_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        saved += 1
+        try:
+            name = str(json.loads(line).get("name", ""))
+        except json.JSONDecodeError:
+            continue
+        if name.startswith("sample_"):
+            try:
+                max_index = max(max_index, int(name.rsplit("_", 1)[1]))
+            except ValueError:
+                pass
+    return saved, max_index
+
+
 def status_text(args: argparse.Namespace, obs: LatestObservation, sample_count: int, last_action: str) -> str:
     return "\n".join(
         [
@@ -610,7 +631,8 @@ def main() -> int:
         web.start()
 
     obs = LatestObservation()
-    sample_count = sum(1 for line in (args.output_dir / "samples.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()) if (args.output_dir / "samples.jsonl").exists() else 0
+    sample_count, max_sample_index = existing_sample_counts(args.output_dir / "samples.jsonl")
+    next_sample_index = max_sample_index + 1
     last_action = "Ready. Move to a new visible-board pose and press Sample."
 
     print("SO101 wrist vision hand-eye capture")
@@ -654,15 +676,16 @@ def main() -> int:
                         parts = command_text.split(maxsplit=1)
                         if len(parts) == 2:
                             note = parts[1]
-                        sample_count += 1
                         row = save_sample(
                             args=args,
                             obs=obs,
                             tf_buffer=tf_buffer,
                             joint_jog=joint_jog,
-                            sample_index=sample_count,
+                            sample_index=next_sample_index,
                             note=note,
                         )
+                        sample_count += 1
+                        next_sample_index += 1
                         last_action = (
                             f"sampled {row['name']}: markers={row['quality']['detected_markers']} "
                             f"err={row['quality']['mean_reprojection_error_px']:.2f}px"
