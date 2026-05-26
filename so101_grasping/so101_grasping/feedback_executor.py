@@ -199,9 +199,12 @@ class FeedbackArmExecutor:
         return np.asarray(self._solver.fk(q), dtype=np.float64)
 
     def pose_position_error(self, q: np.ndarray, target: PoseStamped) -> float:
+        return float(np.linalg.norm(self.pose_position_delta(q, target)))
+
+    def pose_position_delta(self, q: np.ndarray, target: PoseStamped) -> np.ndarray:
         actual = self.fk(q)[:3, 3]
         desired = pose_to_matrix(target)[:3, 3]
-        return float(np.linalg.norm(actual - desired))
+        return np.asarray(actual - desired, dtype=np.float64)
 
     def solve_sequence(
         self,
@@ -320,9 +323,12 @@ class FeedbackArmExecutor:
                 continue
             if getattr(stage, "pose", None) is not None:
                 after_error = self.pose_position_error(after, stage.pose)
+                after_delta = self.pose_position_delta(after, stage.pose)
                 self._node.get_logger().info(
                     f"{stage.name}: feedback attempt {attempt + 1}/"
-                    f"{self.max_correction_iters + 1} pos_error={after_error * 1000.0:.1f}mm"
+                    f"{self.max_correction_iters + 1} pos_error={after_error * 1000.0:.1f}mm "
+                    f"delta_xyz_mm=({after_delta[0] * 1000.0:.1f},"
+                    f"{after_delta[1] * 1000.0:.1f},{after_delta[2] * 1000.0:.1f})"
                 )
             else:
                 after_error = self._arm_joint_error(after, q_goal)
@@ -333,10 +339,13 @@ class FeedbackArmExecutor:
 
         measured = self.measured_q(timeout_s=0.2)
         if measured is not None and getattr(stage, "pose", None) is not None:
+            delta = self.pose_position_delta(measured, stage.pose)
             return (
                 False,
                 f"{stage.name}: feedback max corrections reached "
-                f"(pos_error={self.pose_position_error(measured, stage.pose) * 1000.0:.1f}mm)",
+                f"(pos_error={self.pose_position_error(measured, stage.pose) * 1000.0:.1f}mm, "
+                f"delta_xyz_mm=({delta[0] * 1000.0:.1f},{delta[1] * 1000.0:.1f},"
+                f"{delta[2] * 1000.0:.1f}))",
             )
         if measured is not None and getattr(stage, "configuration_name", None) is not None:
             _, q_goal = self._solve_named_stage(stage.name, str(stage.configuration_name), measured)
