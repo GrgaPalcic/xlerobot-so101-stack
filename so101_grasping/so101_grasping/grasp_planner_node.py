@@ -54,6 +54,7 @@ class PlannedStage:
     name: str
     pose: PoseStamped | None
     result: Any
+    configuration_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,8 @@ class GraspPlannerNode(Node):
         self.declare_parameter("use_pose_goal_fallback", True)
         self.declare_parameter("grasp_pitch_options_rad", [2.20, 2.55, 2.90, 3.141592653589793])
         self.declare_parameter("cloud_target_z_percentiles", [35.0, 55.0, 75.0])
+        self.declare_parameter("wrist_confirmation_before_descent", True)
+        self.declare_parameter("require_wrist_confirmation_for_execution", False)
         self.declare_parameter("require_wrist_cloud_for_execution", False)
         self.declare_parameter("min_wrist_cloud_points_for_execution", 1)
         self.declare_parameter("max_wrist_cloud_age_s", 5.0)
@@ -1229,7 +1232,7 @@ class GraspPlannerNode(Node):
                 return [], f"{stage.name}: no pose or named configuration"
             if not plan_result:
                 return [], f"{stage.name}: {message}"
-            planned.append(PlannedStage(stage.name, stage.pose, plan_result))
+            planned.append(PlannedStage(stage.name, stage.pose, plan_result, stage.configuration_name))
             messages.append(f"{stage.name}: {message}")
             start_state = next_state if next_state is not None else self._state_from_plan_end(plan_result, start_state)
         return planned, " -> ".join(messages)
@@ -1393,6 +1396,9 @@ class GraspPlannerNode(Node):
             return self._plan_to_pose(stage.pose)
         return None, None, f"{stage.name}: no pose or named configuration"
 
+    def _primitive_from_planned_stage(self, stage: PlannedStage) -> PrimitiveStage:
+        return PrimitiveStage(stage.name, pose=stage.pose, configuration_name=stage.configuration_name)
+
     def _execution_wrist_cloud_check(self) -> tuple[bool, str]:
         self._require_wrist_cloud_for_execution = bool(
             self.get_parameter("require_wrist_cloud_for_execution").value
@@ -1515,7 +1521,7 @@ class GraspPlannerNode(Node):
         confirmation_target: np.ndarray | None = None,
     ) -> tuple[bool, str]:
         reference_wrist_roll = self._current_wrist_roll()
-        for stage in planned_stages:
+        for index, stage in enumerate(planned_stages):
             if stage.name.endswith("descent_close"):
                 if refresh_before_descent:
                     refresh_ok, refresh_message = self._refresh_wrist_confirmation(
@@ -1541,14 +1547,26 @@ class GraspPlannerNode(Node):
                         + " -> ".join(executed_messages + [wrist_message]),
                     )
 
-            plan_result = stage.result
+            if index == 0:
+                plan_result = stage.result
+                expected_state = self._state_from_plan_end(plan_result, self._current_robot_state())
+                plan_source = "preplanned"
+                plan_message = ""
+            else:
+                primitive_stage = self._primitive_from_planned_stage(stage)
+                self.get_logger().info(f"Replanning SO-101 grasp stage from live state: {stage.name}")
+                plan_result, expected_state, plan_message = self._plan_primitive_stage_from_current(primitive_stage)
+                if not plan_result or expected_state is None:
+                    return False, f"execution stopped at {stage.name}: live replan failed: {plan_message}"
+                plan_source = "live-replanned"
             wrist_delta = self._trajectory_wrist_roll_delta(plan_result, reference_wrist_roll)
             wrist_reject_reason = self._wrist_roll_reject_reason(wrist_delta)
             if wrist_reject_reason is not None:
-                return False, f"execution stopped at {stage.name}: preplanned {wrist_reject_reason}"
+                return False, f"execution stopped at {stage.name}: {plan_source} {wrist_reject_reason}"
             wrist_note = self._wrist_roll_note(wrist_delta)
-            expected_state = self._state_from_plan_end(plan_result, self._current_robot_state())
-            self.get_logger().info(f"Executing preplanned SO-101 grasp stage: {stage.name}{wrist_note}")
+            if plan_message:
+                self.get_logger().info(f"{stage.name}: {plan_message}{wrist_note}")
+            self.get_logger().info(f"Executing {plan_source} SO-101 grasp stage: {stage.name}{wrist_note}")
             execute_result = self._moveit.execute(plan_result.trajectory, controllers=[])
             if execute_result is False:
                 return False, f"execution stopped at {stage.name}: MoveIt execute returned false"
@@ -1776,31 +1794,42 @@ class GraspPlannerNode(Node):
         *,
         confirmation_target: np.ndarray | None,
     ) -> tuple[bool, str]:
-        if not bool(self.get_parameter("require_wrist_cloud_for_execution").value):
-            return True, "wrist confirmation skipped; wrist-cloud execution gate disabled"
+        if not bool(self.get_parameter("wrist_confirmation_before_descent").value):
+            return True, "wrist confirmation skipped; disabled"
+        require_confirmation = bool(self.get_parameter("require_wrist_confirmation_for_execution").value)
+        required_cloud = bool(self.get_parameter("require_wrist_cloud_for_execution").value)
+        gate_note = "required" if require_confirmation or required_cloud else "advisory"
         try:
             response = self._detect_grasps(prompt, top_k)
         except Exception as exc:  # noqa: BLE001 - return as execution audit detail.
-            return False, f"wrist confirmation refresh failed: {exc}"
+            message = f"wrist confirmation {gate_note} refresh failed: {exc}"
+            return (False, message) if require_confirmation else (True, message)
         if not bool(response.success):
-            return False, f"wrist confirmation refresh failed: {response.message}"
+            message = f"wrist confirmation {gate_note} refresh failed: {response.message}"
+            return (False, message) if require_confirmation else (True, message)
         if confirmation_target is None:
-            return True, f"wrist confirmation refreshed: {len(response.grasps)} candidate(s)"
+            return True, f"wrist confirmation {gate_note}: refreshed {len(response.grasps)} candidate(s)"
         try:
             refreshed_grasps = [self._grasp_to_arm_base(grasp) for grasp in response.grasps]
         except Exception as exc:  # noqa: BLE001 - report the concrete TF issue.
-            return False, f"wrist confirmation transform failed: {exc}"
+            message = f"wrist confirmation {gate_note} transform failed: {exc}"
+            return (False, message) if require_confirmation else (True, message)
         matched, rejected = self._filter_wrist_refine_candidates(refreshed_grasps, confirmation_target)
         if not matched:
             reason = "; ".join(rejected[:6]) if rejected else "no candidates after same-object gate"
+            message = (
+                f"wrist confirmation {gate_note}: found {len(response.grasps)} candidate(s), "
+                f"but none matched initial target: {reason}"
+            )
+            if require_confirmation:
+                return False, message
             return (
-                False,
-                f"wrist confirmation found {len(response.grasps)} candidate(s), "
-                f"but none matched initial target: {reason}",
+                True,
+                message + "; continuing on overhead-primary plan",
             )
         return (
             True,
-            f"wrist confirmation matched {len(matched)}/{len(response.grasps)} candidate(s) "
+            f"wrist confirmation {gate_note}: matched {len(matched)}/{len(response.grasps)} candidate(s) "
             "near initial target",
         )
 

@@ -1203,17 +1203,21 @@ rejected if they exceed the same-object gate
 camera sees a pink arm part, cable, or other distractor after the view move,
 execution should stop rather than replan to that object.
 
-With the default `WRIST_REFINE_BEFORE_GRASP=false`, the wrist view is only a
-confirmation gate before descent. A refreshed wrist detection must remain near
-the original target, but the planner does not switch to the refreshed wrist
-target. The wrapper preserves timestamped copies of `detect`, `plan`, and
-`execute` service logs in addition to the latest convenience files.
+With the default `WRIST_REFINE_BEFORE_GRASP=false`, the wrist view is refreshed
+before descent as an agreement diagnostic. A shifted wrist detection is logged,
+but the default runtime continues on the overhead-primary plan while
+wrist/overhead agreement is still being validated. To make the wrist view a
+hard gate, run with `REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION=true` and, if
+needed, `REQUIRE_WRIST_CLOUD_FOR_EXECUTION=true`. The planner does not switch
+to the refreshed wrist target unless `WRIST_REFINE_BEFORE_GRASP=true`. The
+wrapper preserves timestamped copies of `detect`, `plan`, and `execute`
+service logs in addition to the latest convenience files.
 
 The GPU wrapper defaults initial GG-CNN grasping and metric-untrusted
 cross-view fallback to the overhead view. Wrist detections are still useful
-when they agree with overhead and for the pre-descent confirmation gate. If the
-GPU log reports `single_wrist:metric_untrusted`, treat that run as a
-perception fault and inspect the masks/depth before executing.
+when they agree with overhead and as pre-descent diagnostics. If the GPU log
+reports `single_wrist:metric_untrusted`, treat the wrist result as untrusted
+and inspect masks/depth/TF before enabling hard wrist gates.
 
 The verification solve still uses the calibrated GoPro intrinsics at the same
 image size. The `BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX` environment variable

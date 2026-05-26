@@ -19,6 +19,9 @@ WRIST_REFINE_BEFORE_GRASP="${WRIST_REFINE_BEFORE_GRASP:-false}"
 PREFER_LOW_WRIST_ROLL="${PREFER_LOW_WRIST_ROLL:-true}"
 PREFERRED_WRIST_ROLL_DELTA_RAD="${PREFERRED_WRIST_ROLL_DELTA_RAD:-0.35}"
 MAX_WRIST_ROLL_DELTA_RAD="${MAX_WRIST_ROLL_DELTA_RAD:-0.90}"
+WRIST_CONFIRMATION_BEFORE_DESCENT="${WRIST_CONFIRMATION_BEFORE_DESCENT:-true}"
+REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION="${REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION:-false}"
+REQUIRE_WRIST_CLOUD_FOR_EXECUTION="${REQUIRE_WRIST_CLOUD_FOR_EXECUTION:-false}"
 BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX="${BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX:-8.0}"
 BOARD_VERIFY_MIN_MARKERS="${BOARD_VERIFY_MIN_MARKERS:-8}"
 BOARD_VERIFY_MIN_INLIER_POINTS="${BOARD_VERIFY_MIN_INLIER_POINTS:-24}"
@@ -238,6 +241,9 @@ apply_planner_runtime_params() {
   ros2 param set "/${side}_grasp/grasp_planner_node" prefer_low_wrist_roll "${PREFER_LOW_WRIST_ROLL}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" preferred_wrist_roll_delta_rad "${PREFERRED_WRIST_ROLL_DELTA_RAD}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" max_wrist_roll_delta_rad "${MAX_WRIST_ROLL_DELTA_RAD}" >/dev/null
+  ros2 param set "/${side}_grasp/grasp_planner_node" wrist_confirmation_before_descent "${WRIST_CONFIRMATION_BEFORE_DESCENT}" >/dev/null
+  ros2 param set "/${side}_grasp/grasp_planner_node" require_wrist_confirmation_for_execution "${REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION}" >/dev/null
+  ros2 param set "/${side}_grasp/grasp_planner_node" require_wrist_cloud_for_execution "${REQUIRE_WRIST_CLOUD_FOR_EXECUTION}" >/dev/null
 }
 
 detect() {
@@ -257,6 +263,7 @@ plan() {
   wait_for_runtime_tf 20
   apply_planner_runtime_params
   echo "wrist_roll prefer_low=${PREFER_LOW_WRIST_ROLL} preferred_delta=${PREFERRED_WRIST_ROLL_DELTA_RAD} max_delta=${MAX_WRIST_ROLL_DELTA_RAD}"
+  echo "wrist_confirmation before_descent=${WRIST_CONFIRMATION_BEFORE_DESCENT} require_match=${REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION} require_cloud=${REQUIRE_WRIST_CLOUD_FOR_EXECUTION}"
   call_ros_service "${PLAN_CALL_TIMEOUT_S}" "${LOG_DIR}/${side}_plan_grasp.txt" \
     "/${side}_grasp/plan_grasp" so101_grasp_msgs/srv/PlanGrasp \
     "{prompt: '${prompt}', top_k: ${DEFAULT_TOP_K}, grasp_index: 0, execute: false, pregrasp_offset_m: 0.10, plan_time_s: 30.0}"
@@ -371,6 +378,7 @@ execute_grasp() {
   ros2 param set "/${side}_grasp/grasp_planner_node" wrist_refine_before_grasp "${WRIST_REFINE_BEFORE_GRASP}" >/dev/null
   echo "wrist_refine_before_grasp=${WRIST_REFINE_BEFORE_GRASP}"
   echo "wrist_roll prefer_low=${PREFER_LOW_WRIST_ROLL} preferred_delta=${PREFERRED_WRIST_ROLL_DELTA_RAD} max_delta=${MAX_WRIST_ROLL_DELTA_RAD}"
+  echo "wrist_confirmation before_descent=${WRIST_CONFIRMATION_BEFORE_DESCENT} require_match=${REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION} require_cloud=${REQUIRE_WRIST_CLOUD_FOR_EXECUTION}"
   ros2 param set "/${side}_grasp/grasp_planner_node" allow_execution true >/dev/null
   trap 'ros2 param set "/'"${side}"'_grasp/grasp_planner_node" allow_execution false >/dev/null 2>&1 || true' EXIT
   call_ros_service "${EXECUTE_CALL_TIMEOUT_S}" "${LOG_DIR}/${side}_execute_grasp.txt" \
