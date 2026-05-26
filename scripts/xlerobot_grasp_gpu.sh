@@ -20,18 +20,22 @@ export GRASP_BACKEND="${GRASP_BACKEND:-ggcnn}"
 export GGCNN_PRIMARY_VIEW="${GGCNN_PRIMARY_VIEW:-wrist}"
 export DA3_CONDITIONING="${DA3_CONDITIONING:-required}"
 export DA3_FALLBACK_INDEPENDENT="${DA3_FALLBACK_INDEPENDENT:-false}"
+export PROCESS_RES="${PROCESS_RES:-336}"
+export CUDA_EMPTY_CACHE="${CUDA_EMPTY_CACHE:-true}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True,max_split_size_mb:128}"
 export WORKSPACE_BOUNDS="${WORKSPACE_BOUNDS:--0.50 0.50 -0.35 0.35 -0.05 0.50}"
 export SUPPORT_PLANE_YAML="${SUPPORT_PLANE_YAML:-${GPU_RUN}/extrinsics/world_support_plane.yaml}"
 
 usage() {
   cat <<EOF
-usage: $0 up|server|tunnel|sync|status|down
+usage: $0 up|server|tunnel|sync|status|down|restart
 
 Environment:
   DELL_HOST=${DELL_HOST}
   DELL_RUN=${DELL_RUN}
   GPU_RUN=${GPU_RUN}
   GRASP_BACKEND=${GRASP_BACKEND}
+  PROCESS_RES=${PROCESS_RES}
 EOF
 }
 
@@ -52,6 +56,12 @@ start_server() {
   if [[ -s "${PID_DIR}/grasp_server.pid" ]] && kill -0 "$(cat "${PID_DIR}/grasp_server.pid")" 2>/dev/null; then
     echo "grasp server already running: pid $(cat "${PID_DIR}/grasp_server.pid")"
     return
+  fi
+  if pgrep -af "grasp-server .*--port ${LOCAL_PORT}" >/dev/null 2>&1; then
+    echo "stopping stale grasp server on port ${LOCAL_PORT}:"
+    pgrep -af "grasp-server .*--port ${LOCAL_PORT}" || true
+    stop_stale_server
+    sleep 2
   fi
   if [[ ! -f "${SUPPORT_PLANE_YAML}" ]]; then
     sync_calib
@@ -95,6 +105,10 @@ stop_pid() {
   fi
 }
 
+stop_stale_server() {
+  pkill -f "grasp-server .*--port ${LOCAL_PORT}" 2>/dev/null || true
+}
+
 status() {
   ensure_dirs
   for name in grasp_server grasp_tunnel; do
@@ -104,7 +118,12 @@ status() {
       echo "${name}: stopped"
     fi
   done
+  if pgrep -af "grasp-server .*--port ${LOCAL_PORT}" >/dev/null 2>&1; then
+    echo "port ${LOCAL_PORT} owner(s):"
+    pgrep -af "grasp-server .*--port ${LOCAL_PORT}" || true
+  fi
   echo "support plane: ${SUPPORT_PLANE_YAML}"
+  command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi --query-gpu=memory.used,memory.free --format=csv,noheader,nounits || true
 }
 
 cmd="${1:-}"
@@ -129,7 +148,16 @@ case "${cmd}" in
   down)
     stop_pid grasp_tunnel
     stop_pid grasp_server
+    stop_stale_server
     status
+    ;;
+  restart)
+    stop_pid grasp_tunnel
+    stop_pid grasp_server
+    stop_stale_server
+    sync_calib
+    start_server
+    start_tunnel
     ;;
   *)
     usage

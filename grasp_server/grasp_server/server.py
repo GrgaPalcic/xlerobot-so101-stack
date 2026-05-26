@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import logging
 import time
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ class ServerConfig:
     host: str
     port: int
     pipeline: PipelineConfig
+    cuda_empty_cache: bool
 
 
 def _parse_args() -> argparse.Namespace:
@@ -86,7 +88,36 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--support-plane-snap-min-correction-m", type=float, default=0.005, help="Minimum support-plane correction to apply")
     parser.add_argument("--support-plane-snap-max-correction-m", type=float, default=0.08, help="Maximum support-plane correction allowed")
     parser.add_argument("--support-plane-min-grasp-clearance-m", type=float, default=-0.002, help="Reject grasp centers below this signed support-plane clearance")
+    parser.add_argument("--cuda-empty-cache", action=argparse.BooleanOptionalAction, default=True, help="Run Python GC and torch.cuda.empty_cache() after each request")
     return parser.parse_args()
+
+
+def _cleanup_request_memory(*, cuda_empty_cache: bool) -> None:
+    gc.collect()
+    if not cuda_empty_cache:
+        return
+    try:
+        import torch
+    except ImportError:
+        return
+    if not torch.cuda.is_available():
+        return
+    before_alloc = torch.cuda.memory_allocated()
+    before_reserved = torch.cuda.memory_reserved()
+    torch.cuda.empty_cache()
+    try:
+        torch.cuda.ipc_collect()
+    except Exception:  # noqa: BLE001 - IPC collection is best-effort across torch/CUDA versions.
+        pass
+    after_alloc = torch.cuda.memory_allocated()
+    after_reserved = torch.cuda.memory_reserved()
+    logging.info(
+        "CUDA cleanup: allocated %.1f->%.1f MiB, reserved %.1f->%.1f MiB",
+        before_alloc / 1048576.0,
+        after_alloc / 1048576.0,
+        before_reserved / 1048576.0,
+        after_reserved / 1048576.0,
+    )
 
 
 class ZmqGraspServer:
@@ -171,6 +202,7 @@ class ZmqGraspServer:
                         blobs={},
                     )
                 rep.send(reply)
+                _cleanup_request_memory(cuda_empty_cache=self._config.cuda_empty_cache)
         finally:
             rep.close(linger=0)
             ctx.term()
@@ -232,5 +264,12 @@ def main() -> None:
         association_primary_view=args.association_primary_view,
         association_axis=args.association_axis,
     )
-    server = ZmqGraspServer(ServerConfig(host=args.host, port=args.port, pipeline=pipeline_config))
+    server = ZmqGraspServer(
+        ServerConfig(
+            host=args.host,
+            port=args.port,
+            pipeline=pipeline_config,
+            cuda_empty_cache=args.cuda_empty_cache,
+        )
+    )
     server.serve()
