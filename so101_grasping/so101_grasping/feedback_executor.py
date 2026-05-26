@@ -320,6 +320,8 @@ class FeedbackArmExecutor:
                         message += f" rot_error={math.degrees(rot_error):.1f}deg"
                     return True, message
                 result, q_goal = self._solve_pose_stage(stage.name, stage.pose, measured)
+                if result is not None and q_goal is None:
+                    return False, f"{stage.name}: {result.message}"
                 if result is None or q_goal is None:
                     return False, f"{stage.name}: feedback IK failed"
                 if rot_error is None:

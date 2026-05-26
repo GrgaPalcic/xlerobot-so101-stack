@@ -19,9 +19,13 @@ VERIFY_BOARD_BEFORE_EXECUTE="${VERIFY_BOARD_BEFORE_EXECUTE:-true}"
 EXECUTION_BACKEND="${EXECUTION_BACKEND:-feedback}"
 WRIST_REFINE_BEFORE_GRASP="${WRIST_REFINE_BEFORE_GRASP:-true}"
 WRIST_REFINE_CAMERA_STANDOFF_M="${WRIST_REFINE_CAMERA_STANDOFF_M:-0.22}"
+WRIST_REFINE_VIEW_STANDOFFS_M="${WRIST_REFINE_VIEW_STANDOFFS_M:-[0.18, 0.22, 0.26]}"
+WRIST_REFINE_VIEW_LATERAL_OFFSETS_M="${WRIST_REFINE_VIEW_LATERAL_OFFSETS_M:-[0.0, 0.035, 0.070]}"
+WRIST_REFINE_MAX_VIEW_ATTEMPTS="${WRIST_REFINE_MAX_VIEW_ATTEMPTS:-3}"
 WRIST_REFINE_MIN_EE_Z_M="${WRIST_REFINE_MIN_EE_Z_M:-0.12}"
 WRIST_REFINE_REQUIRE_WRIST_CLOUD="${WRIST_REFINE_REQUIRE_WRIST_CLOUD:-true}"
 WRIST_REFINE_MIN_WRIST_CLOUD_POINTS="${WRIST_REFINE_MIN_WRIST_CLOUD_POINTS:-64}"
+POST_GRASP_LIFT_M="${POST_GRASP_LIFT_M:-0.0}"
 PREFER_LOW_WRIST_ROLL="${PREFER_LOW_WRIST_ROLL:-true}"
 PREFERRED_WRIST_ROLL_DELTA_RAD="${PREFERRED_WRIST_ROLL_DELTA_RAD:-0.35}"
 MAX_WRIST_ROLL_DELTA_RAD="${MAX_WRIST_ROLL_DELTA_RAD:-0.90}"
@@ -290,9 +294,13 @@ apply_planner_runtime_params() {
   ros2 param set "/${side}_grasp/grasp_planner_node" require_wrist_cloud_for_execution "${REQUIRE_WRIST_CLOUD_FOR_EXECUTION}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" wrist_refine_before_grasp "${WRIST_REFINE_BEFORE_GRASP}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" wrist_refine_camera_standoff_m "${WRIST_REFINE_CAMERA_STANDOFF_M}" >/dev/null
+  ros2 param set "/${side}_grasp/grasp_planner_node" wrist_refine_view_standoffs_m "${WRIST_REFINE_VIEW_STANDOFFS_M}" >/dev/null
+  ros2 param set "/${side}_grasp/grasp_planner_node" wrist_refine_view_lateral_offsets_m "${WRIST_REFINE_VIEW_LATERAL_OFFSETS_M}" >/dev/null
+  ros2 param set "/${side}_grasp/grasp_planner_node" wrist_refine_max_view_attempts "${WRIST_REFINE_MAX_VIEW_ATTEMPTS}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" wrist_refine_min_ee_z_m "${WRIST_REFINE_MIN_EE_Z_M}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" wrist_refine_require_wrist_cloud "${WRIST_REFINE_REQUIRE_WRIST_CLOUD}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" wrist_refine_min_wrist_cloud_points "${WRIST_REFINE_MIN_WRIST_CLOUD_POINTS}" >/dev/null
+  ros2 param set "/${side}_grasp/grasp_planner_node" post_grasp_lift_m "${POST_GRASP_LIFT_M}" >/dev/null
 }
 
 detect() {
@@ -314,6 +322,7 @@ plan() {
   echo "execution_backend=${EXECUTION_BACKEND}"
   echo "wrist_roll prefer_low=${PREFER_LOW_WRIST_ROLL} preferred_delta=${PREFERRED_WRIST_ROLL_DELTA_RAD} max_delta=${MAX_WRIST_ROLL_DELTA_RAD}"
   echo "feedback tolerance=${FEEDBACK_POSITION_TOLERANCE_M}m corrections=${FEEDBACK_MAX_CORRECTION_ITERS} min_joint_delta=${FEEDBACK_MIN_JOINT_DELTA_RAD}rad correction_gain=${FEEDBACK_CORRECTION_COMMAND_GAIN} max_overcommand=${FEEDBACK_MAX_OVERCOMMAND_RAD}rad look_rot_weight=${FEEDBACK_LOOK_ROT_WEIGHT} look_rot_tol=${FEEDBACK_LOOK_ROTATION_TOLERANCE_DEG}deg"
+  echo "wrist_refine views standoffs=${WRIST_REFINE_VIEW_STANDOFFS_M} lateral_offsets=${WRIST_REFINE_VIEW_LATERAL_OFFSETS_M} max_attempts=${WRIST_REFINE_MAX_VIEW_ATTEMPTS} post_lift=${POST_GRASP_LIFT_M}m"
   echo "wrist_confirmation before_descent=${WRIST_CONFIRMATION_BEFORE_DESCENT} require_match=${REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION} require_cloud=${REQUIRE_WRIST_CLOUD_FOR_EXECUTION}"
   call_ros_service "${PLAN_CALL_TIMEOUT_S}" "${LOG_DIR}/${side}_plan_grasp.txt" \
     "/${side}_grasp/plan_grasp" so101_grasp_msgs/srv/PlanGrasp \
@@ -432,6 +441,7 @@ execute_grasp() {
   echo "wrist_refine camera_standoff=${WRIST_REFINE_CAMERA_STANDOFF_M}m min_ee_z=${WRIST_REFINE_MIN_EE_Z_M}m require_cloud=${WRIST_REFINE_REQUIRE_WRIST_CLOUD} min_cloud_points=${WRIST_REFINE_MIN_WRIST_CLOUD_POINTS}"
   echo "wrist_roll prefer_low=${PREFER_LOW_WRIST_ROLL} preferred_delta=${PREFERRED_WRIST_ROLL_DELTA_RAD} max_delta=${MAX_WRIST_ROLL_DELTA_RAD}"
   echo "feedback tolerance=${FEEDBACK_POSITION_TOLERANCE_M}m corrections=${FEEDBACK_MAX_CORRECTION_ITERS} min_joint_delta=${FEEDBACK_MIN_JOINT_DELTA_RAD}rad correction_gain=${FEEDBACK_CORRECTION_COMMAND_GAIN} max_overcommand=${FEEDBACK_MAX_OVERCOMMAND_RAD}rad look_rot_weight=${FEEDBACK_LOOK_ROT_WEIGHT} look_rot_tol=${FEEDBACK_LOOK_ROTATION_TOLERANCE_DEG}deg"
+  echo "wrist_refine views standoffs=${WRIST_REFINE_VIEW_STANDOFFS_M} lateral_offsets=${WRIST_REFINE_VIEW_LATERAL_OFFSETS_M} max_attempts=${WRIST_REFINE_MAX_VIEW_ATTEMPTS} post_lift=${POST_GRASP_LIFT_M}m"
   echo "wrist_confirmation before_descent=${WRIST_CONFIRMATION_BEFORE_DESCENT} require_match=${REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION} require_cloud=${REQUIRE_WRIST_CLOUD_FOR_EXECUTION}"
   ros2 param set "/${side}_grasp/grasp_planner_node" allow_execution true >/dev/null
   trap 'ros2 param set "/'"${side}"'_grasp/grasp_planner_node" allow_execution false >/dev/null 2>&1 || true' EXIT

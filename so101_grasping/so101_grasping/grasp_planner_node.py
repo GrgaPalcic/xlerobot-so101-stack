@@ -38,6 +38,7 @@ from so101_grasping.grasp_staging import (
     signed_plane_distance,
     surface_relative_stages,
 )
+from so101_grasping.wrist_views import WristViewCandidate, wrist_view_candidates
 from so101_grasp_msgs.msg import GraspCandidate
 from so101_grasp_msgs.srv import DetectGrasps, PlanGrasp
 
@@ -203,12 +204,16 @@ class GraspPlannerNode(Node):
         self.declare_parameter("wrist_refine_plan_budget_s", 20.0)
         self.declare_parameter("wrist_refine_settle_s", 0.75)
         self.declare_parameter("wrist_refine_camera_standoff_m", 0.22)
+        self.declare_parameter("wrist_refine_view_standoffs_m", [0.18, 0.22, 0.26])
+        self.declare_parameter("wrist_refine_view_lateral_offsets_m", [0.0, 0.035, 0.070])
+        self.declare_parameter("wrist_refine_max_view_attempts", 3)
         self.declare_parameter("wrist_refine_min_ee_z_m", 0.12)
         self.declare_parameter("wrist_refine_require_wrist_cloud", True)
         self.declare_parameter("wrist_refine_min_wrist_cloud_points", 64)
         self.declare_parameter("wrist_refine_fallback_to_initial", False)
         self.declare_parameter("wrist_refine_max_xy_shift_m", 0.08)
         self.declare_parameter("wrist_refine_max_z_shift_m", 0.10)
+        self.declare_parameter("post_grasp_lift_m", 0.0)
         self.declare_parameter("wrist_camera_xyz_in_ee", [0.002344943, 0.072594056, -0.119362094])
         self.declare_parameter(
             "wrist_camera_quat_xyzw_in_ee",
@@ -303,6 +308,18 @@ class GraspPlannerNode(Node):
             0.08,
             float(self.get_parameter("wrist_refine_camera_standoff_m").value),
         )
+        self._wrist_refine_view_standoffs_m = self._float_parameter_list(
+            "wrist_refine_view_standoffs_m",
+            [0.18, 0.22, 0.26],
+        )
+        self._wrist_refine_view_lateral_offsets_m = self._float_parameter_list(
+            "wrist_refine_view_lateral_offsets_m",
+            [0.0, 0.035, 0.070],
+        )
+        self._wrist_refine_max_view_attempts = max(
+            1,
+            int(self.get_parameter("wrist_refine_max_view_attempts").value),
+        )
         self._wrist_refine_min_ee_z_m = float(self.get_parameter("wrist_refine_min_ee_z_m").value)
         self._wrist_refine_require_wrist_cloud = bool(
             self.get_parameter("wrist_refine_require_wrist_cloud").value
@@ -322,6 +339,7 @@ class GraspPlannerNode(Node):
             0.0,
             float(self.get_parameter("wrist_refine_max_z_shift_m").value),
         )
+        self._post_grasp_lift_m = max(0.0, float(self.get_parameter("post_grasp_lift_m").value))
         self._wrist_camera_xyz_in_ee = np.asarray(
             self.get_parameter("wrist_camera_xyz_in_ee").value,
             dtype=np.float64,
@@ -914,56 +932,70 @@ class GraspPlannerNode(Node):
         position, _, _ = _pose_to_numpy(grasp.pose)
         return position
 
+    def _wrist_refine_view_normal(self) -> np.ndarray | None:
+        if not self._support_plane_staging_enabled():
+            return None
+        try:
+            _, normal = self._support_plane_in_arm_base()
+        except Exception as exc:  # noqa: BLE001 - fall back to base +Z view generation.
+            self.get_logger().warning(f"wrist-refine could not read support-plane normal: {exc}")
+            return None
+        return normal
+
     def _make_wrist_camera_look_stage(self, grasp: GraspCandidate) -> PrimitiveStage:
-        target = self._wrist_refine_target(grasp)
-        camera_position = target.copy()
-        camera_position[2] = max(
-            float(target[2] + self._wrist_refine_camera_standoff_m),
-            self._min_ready_z_m,
+        options = self._wrist_refine_view_stage_options_for_target(self._wrist_refine_target(grasp))
+        if not options:
+            raise RuntimeError("no wrist camera view candidates generated")
+        _, stages = options[0]
+        return stages[-1]
+
+    def _wrist_refine_view_stage_options_for_target(
+        self,
+        target: np.ndarray,
+    ) -> list[tuple[str, list[PrimitiveStage]]]:
+        self._wrist_refine_view_standoffs_m = self._float_parameter_list(
+            "wrist_refine_view_standoffs_m",
+            [0.18, 0.22, 0.26],
         )
+        self._wrist_refine_view_lateral_offsets_m = self._float_parameter_list(
+            "wrist_refine_view_lateral_offsets_m",
+            [0.0, 0.035, 0.070],
+        )
+        self._wrist_refine_min_ee_z_m = float(self.get_parameter("wrist_refine_min_ee_z_m").value)
+        candidates = wrist_view_candidates(
+            target=np.asarray(target, dtype=np.float64),
+            wrist_camera_xyz_in_ee=self._wrist_camera_xyz_in_ee,
+            wrist_camera_quat_xyzw_in_ee=self._wrist_camera_quat_xyzw_in_ee,
+            standoffs_m=self._wrist_refine_view_standoffs_m,
+            lateral_offsets_m=self._wrist_refine_view_lateral_offsets_m,
+            min_ee_z_m=self._wrist_refine_min_ee_z_m,
+            plane_normal=self._wrist_refine_view_normal(),
+        )
+        options: list[tuple[str, list[PrimitiveStage]]] = []
+        for candidate in candidates:
+            options.append((candidate.label, [*self._initial_ready_stages(), self._view_stage_from_candidate(target, candidate)]))
+        return options
 
-        optical_z = target - camera_position
-        z_norm = float(np.linalg.norm(optical_z))
-        if z_norm < 1e-6:
-            optical_z = np.asarray([0.0, 0.0, -1.0], dtype=np.float64)
-        else:
-            optical_z = optical_z / z_norm
-
-        optical_x_guess = np.asarray([0.0, 1.0, 0.0], dtype=np.float64)
-        if abs(float(optical_x_guess @ optical_z)) > 0.90:
-            optical_x_guess = np.asarray([1.0, 0.0, 0.0], dtype=np.float64)
-        optical_x = optical_x_guess - optical_z * float(optical_x_guess @ optical_z)
-        optical_x = optical_x / max(float(np.linalg.norm(optical_x)), 1e-9)
-        optical_y = np.cross(optical_z, optical_x)
-        optical_y = optical_y / max(float(np.linalg.norm(optical_y)), 1e-9)
-        base_to_camera = np.column_stack([optical_x, optical_y, optical_z])
-
-        ee_to_camera = quaternion_matrix(self._wrist_camera_quat_xyzw_in_ee)[:3, :3]
-        base_to_ee = base_to_camera @ ee_to_camera.T
-        ee_position = camera_position - base_to_ee @ self._wrist_camera_xyz_in_ee
-        ee_position[2] = max(float(ee_position[2]), self._wrist_refine_min_ee_z_m)
-        actual_camera_position = ee_position + base_to_ee @ self._wrist_camera_xyz_in_ee
-        target_in_camera = base_to_camera.T @ (target - actual_camera_position)
-
-        matrix = np.eye(4, dtype=np.float64)
-        matrix[:3, :3] = base_to_ee
-        quat = np.asarray(quaternion_from_matrix(matrix), dtype=np.float64)
-        quat = quat / max(float(np.linalg.norm(quat)), 1e-9)
+    def _view_stage_from_candidate(self, target: np.ndarray, candidate: WristViewCandidate) -> PrimitiveStage:
         self.get_logger().info(
             "wrist_camera_look: "
+            f"view={candidate.label} "
             f"target=({target[0]:.3f},{target[1]:.3f},{target[2]:.3f}) "
-            f"camera=({actual_camera_position[0]:.3f},{actual_camera_position[1]:.3f},"
-            f"{actual_camera_position[2]:.3f}) "
-            f"target_in_camera=({target_in_camera[0]:.3f},{target_in_camera[1]:.3f},"
-            f"{target_in_camera[2]:.3f}) "
-            f"ee=({ee_position[0]:.3f},{ee_position[1]:.3f},{ee_position[2]:.3f})"
+            f"camera=({candidate.camera_position[0]:.3f},{candidate.camera_position[1]:.3f},"
+            f"{candidate.camera_position[2]:.3f}) "
+            f"target_in_camera=({candidate.target_in_camera[0]:.3f},{candidate.target_in_camera[1]:.3f},"
+            f"{candidate.target_in_camera[2]:.3f}) "
+            f"ee=({candidate.ee_position[0]:.3f},{candidate.ee_position[1]:.3f},"
+            f"{candidate.ee_position[2]:.3f})"
         )
-        return PrimitiveStage("wrist_camera_look", pose=self._make_pose(ee_position, quat))
+        return PrimitiveStage("wrist_camera_look", pose=self._make_pose(candidate.ee_position, candidate.ee_quat_xyzw))
 
     def _wrist_refine_view_stages(self, selection: PlanSelection) -> list[PrimitiveStage]:
-        stages = self._initial_ready_stages()
-        stages.append(self._make_wrist_camera_look_stage(selection.grasp))
-        return stages
+        options = self._wrist_refine_view_stage_options(selection)
+        return options[0][1] if options else []
+
+    def _wrist_refine_view_stage_options(self, selection: PlanSelection) -> list[tuple[str, list[PrimitiveStage]]]:
+        return self._wrist_refine_view_stage_options_for_target(self._wrist_refine_target(selection.grasp))
 
     def _initial_ready_stages(self) -> list[PrimitiveStage]:
         name = str(self.get_parameter("ready_configuration_name").value).strip()
@@ -1901,6 +1933,32 @@ class GraspPlannerNode(Node):
                 return False, "execution stopped after arm motion: " + " -> ".join(executed_messages)
         return True, " -> ".join(executed_messages)
 
+    def _post_grasp_lift_axis(self) -> np.ndarray:
+        axis = np.asarray([0.0, 0.0, 1.0], dtype=np.float64)
+        if not self._support_plane_staging_enabled():
+            return axis
+        try:
+            _, normal = self._support_plane_in_arm_base()
+        except Exception as exc:  # noqa: BLE001 - fall back to base +Z lift.
+            self.get_logger().warning(f"post-grasp lift could not read support-plane normal: {exc}")
+            return axis
+        if float(normal @ axis) < 0.0:
+            normal = -normal
+        if abs(float(normal @ axis)) < 0.20:
+            return axis
+        return normalize_vector(normal)
+
+    def _post_grasp_lift_stage(self, primitive_stages: list[PrimitiveStage]) -> PrimitiveStage | None:
+        self._post_grasp_lift_m = max(0.0, float(self.get_parameter("post_grasp_lift_m").value))
+        if self._post_grasp_lift_m <= 1e-6:
+            return None
+        base_stage = next((stage for stage in reversed(primitive_stages) if stage.pose is not None), None)
+        if base_stage is None or base_stage.pose is None:
+            return None
+        position, quat, _ = _pose_to_numpy(base_stage.pose.pose)
+        lifted = position + self._post_grasp_lift_axis() * self._post_grasp_lift_m
+        return PrimitiveStage("post_grasp_lift", pose=self._make_pose(lifted, quat))
+
     def _execute_primitive(
         self,
         primitive_stages: list[PrimitiveStage],
@@ -1956,7 +2014,31 @@ class GraspPlannerNode(Node):
         if not close_ok:
             return False, f"arm stages executed; close failed: {close_message}"
         executed_messages.append(f"close: {close_message}")
-        return True, "executed ready/pregrasp/descent and closed gripper: " + " -> ".join(executed_messages)
+
+        lift_stage = self._post_grasp_lift_stage(primitive_stages)
+        if lift_stage is not None:
+            lift_messages: list[str] = []
+            if self._execution_backend == "feedback":
+                lift_ok, lift_message = self._execute_feedback_arm_stages(
+                    [lift_stage],
+                    prompt=prompt,
+                    top_k=top_k,
+                    executed_messages=lift_messages,
+                    refresh_before_descent=False,
+                )
+            else:
+                lift_ok, lift_message = self._execute_arm_stages(
+                    [lift_stage],
+                    prompt=prompt,
+                    top_k=top_k,
+                    executed_messages=lift_messages,
+                    refresh_before_descent=False,
+                )
+            if not lift_ok:
+                return False, "closed gripper; post-grasp lift failed: " + lift_message
+            executed_messages.append(f"lift: {lift_message}")
+
+        return True, "executed ready/pregrasp/descent/close/lift: " + " -> ".join(executed_messages)
 
     def _execute_wrist_refined_grasp(
         self,
@@ -1975,30 +2057,68 @@ class GraspPlannerNode(Node):
             return False, f"wrist-refine stopped before arm motion: {open_message}", None
 
         initial_target = self._wrist_refine_target(initial_selection.grasp).copy()
-        executed_messages = [f"preopen: {open_message}"]
-        view_stages = self._wrist_refine_view_stages(initial_selection)
-        if self._execution_backend == "feedback":
-            view_ok, view_message = self._execute_feedback_arm_stages(
-                view_stages,
+        base_messages = [f"preopen: {open_message}"]
+        view_options = self._wrist_refine_view_stage_options(initial_selection)
+        if not view_options:
+            return False, "wrist-refine generated no camera view candidates", None
+
+        max_attempts = max(1, int(self.get_parameter("wrist_refine_max_view_attempts").value))
+        failures: list[str] = []
+        for attempt_index, (view_label, view_stages) in enumerate(view_options[:max_attempts], start=1):
+            executed_messages = [*base_messages, f"view {attempt_index}/{max_attempts}: {view_label}"]
+            if self._execution_backend == "feedback":
+                view_ok, view_message = self._execute_feedback_arm_stages(
+                    view_stages,
+                    prompt=prompt,
+                    top_k=top_k,
+                    executed_messages=executed_messages,
+                    refresh_before_descent=False,
+                )
+            else:
+                view_ok, view_message = self._execute_arm_stages(
+                    view_stages,
+                    prompt=prompt,
+                    top_k=top_k,
+                    executed_messages=executed_messages,
+                    refresh_before_descent=False,
+                )
+            if not view_ok:
+                failures.append(f"{view_label}: view move failed: {view_message}")
+                continue
+
+            if self._wrist_refine_settle_s > 0.0:
+                time.sleep(self._wrist_refine_settle_s)
+
+            ok, message, selection, retryable = self._execute_refined_grasp_from_current_view(
+                initial_selection,
+                initial_target=initial_target,
                 prompt=prompt,
                 top_k=top_k,
+                pregrasp_offset=pregrasp_offset,
+                deadline=deadline,
                 executed_messages=executed_messages,
-                refresh_before_descent=False,
             )
-        else:
-            view_ok, view_message = self._execute_arm_stages(
-                view_stages,
-                prompt=prompt,
-                top_k=top_k,
-                executed_messages=executed_messages,
-                refresh_before_descent=False,
-            )
-        if not view_ok:
-            return False, "wrist-refine view move failed: " + view_message, None
+            if ok or not retryable:
+                return ok, message, selection
+            failures.append(f"{view_label}: {message}")
 
-        if self._wrist_refine_settle_s > 0.0:
-            time.sleep(self._wrist_refine_settle_s)
+        return (
+            False,
+            "wrist-refine failed all view attempts: " + " | ".join(failures[:8]),
+            None,
+        )
 
+    def _execute_refined_grasp_from_current_view(
+        self,
+        initial_selection: PlanSelection,
+        *,
+        initial_target: np.ndarray,
+        prompt: str,
+        top_k: int,
+        pregrasp_offset: float,
+        deadline: float,
+        executed_messages: list[str],
+    ) -> tuple[bool, str, PlanSelection | None, bool]:
         refine_top_k = max(int(top_k), self._wrist_refine_top_k)
         try:
             detect_response = self._detect_grasps(prompt, refine_top_k)
@@ -2015,8 +2135,9 @@ class GraspPlannerNode(Node):
                     "wrist-refine detection failed; fell back to initial plan: "
                     + f"{exc}; {fallback_message}",
                     initial_selection,
+                    False,
                 )
-            return False, f"wrist-refine detection failed after view move: {exc}", None
+            return False, f"wrist-refine detection failed after view move: {exc}", None, True
 
         if not detect_response.success or not detect_response.grasps:
             reason = detect_response.message if detect_response.message else "no refreshed candidates"
@@ -2032,8 +2153,9 @@ class GraspPlannerNode(Node):
                     "wrist-refine produced no usable candidates; fell back to initial plan: "
                     + f"{reason}; {fallback_message}",
                     initial_selection,
+                    False,
                 )
-            return False, f"wrist-refine produced no usable candidates after view move: {reason}", None
+            return False, f"wrist-refine produced no usable candidates after view move: {reason}", None, True
 
         try:
             refreshed_grasps = [self._grasp_to_arm_base(grasp) for grasp in detect_response.grasps]
@@ -2050,8 +2172,9 @@ class GraspPlannerNode(Node):
                     "wrist-refine transform failed; fell back to initial plan: "
                     + f"{exc}; {fallback_message}",
                     initial_selection,
+                    False,
                 )
-            return False, f"wrist-refine failed to transform refreshed candidates: {exc}", None
+            return False, f"wrist-refine failed to transform refreshed candidates: {exc}", None, True
 
         refreshed_grasps, rejected = self._filter_wrist_refine_candidates(refreshed_grasps, initial_target)
         if not refreshed_grasps:
@@ -2068,8 +2191,9 @@ class GraspPlannerNode(Node):
                     "wrist-refine rejected refreshed candidates; fell back to initial plan: "
                     + f"{reason}; {fallback_message}",
                     initial_selection,
+                    False,
                 )
-            return False, f"wrist-refine rejected refreshed candidates too far from initial target: {reason}", None
+            return False, f"wrist-refine rejected refreshed candidates too far from initial target: {reason}", None, True
 
         wrist_ok, wrist_message = self._wrist_refine_cloud_check()
         if not wrist_ok:
@@ -2085,8 +2209,9 @@ class GraspPlannerNode(Node):
                     "wrist-refine wrist cloud check failed; fell back to initial plan: "
                     + f"{wrist_message}; {fallback_message}",
                     initial_selection,
+                    False,
                 )
-            return False, "wrist-refine refused overhead-only replan: " + wrist_message, None
+            return False, "wrist-refine refused overhead-only replan: " + wrist_message, None, True
 
         refined_selection, failures = self._select_plan_for_backend(
             refreshed_grasps,
@@ -2109,8 +2234,9 @@ class GraspPlannerNode(Node):
                     "wrist-refine replanning failed; fell back to initial plan: "
                     + f"{message}; {fallback_message}",
                     initial_selection,
+                    False,
                 )
-            return False, "wrist-refine replanning failed after view move: " + message, None
+            return False, "wrist-refine replanning failed after view move: " + message, None, True
 
         final_ok, final_message = self._execute_primitive(
             refined_selection.primitive_stages,
@@ -2126,7 +2252,7 @@ class GraspPlannerNode(Node):
             + f"; {wrist_message}; refreshed plan candidate {refined_selection.candidate_index} "
             + f"{refined_selection.strategy_label}: {refined_selection.message}; "
         )
-        return final_ok, prefix + final_message, refined_selection
+        return final_ok, prefix + final_message, refined_selection, False
 
     def _refresh_wrist_confirmation(
         self,
