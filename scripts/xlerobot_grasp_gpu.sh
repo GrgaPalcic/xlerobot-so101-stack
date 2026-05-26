@@ -227,19 +227,22 @@ stop_stale_tunnel() {
 
 status() {
   ensure_dirs
-  if systemctl --user is-active --quiet so101-grasp-server.service 2>/dev/null; then
-    echo "legacy systemd server: active"
+  if truthy "${USE_SYSTEMD}"; then
+    systemctl --user is-active --quiet so101-grasp-server.service 2>/dev/null \
+      && echo "grasp_server: running systemd so101-grasp-server.service" \
+      || echo "grasp_server: stopped"
+    systemctl --user is-active --quiet so101-grasp-tunnel.service 2>/dev/null \
+      && echo "grasp_tunnel: running systemd so101-grasp-tunnel.service" \
+      || echo "grasp_tunnel: stopped"
+  else
+    for name in grasp_server grasp_tunnel; do
+      if [[ -s "${PID_DIR}/${name}.pid" ]] && kill -0 "$(cat "${PID_DIR}/${name}.pid")" 2>/dev/null; then
+        echo "${name}: running pid $(cat "${PID_DIR}/${name}.pid")"
+      else
+        echo "${name}: stopped"
+      fi
+    done
   fi
-  if systemctl --user is-active --quiet so101-grasp-tunnel.service 2>/dev/null; then
-    echo "legacy systemd tunnel: active"
-  fi
-  for name in grasp_server grasp_tunnel; do
-    if [[ -s "${PID_DIR}/${name}.pid" ]] && kill -0 "$(cat "${PID_DIR}/${name}.pid")" 2>/dev/null; then
-      echo "${name}: running pid $(cat "${PID_DIR}/${name}.pid")"
-    else
-      echo "${name}: stopped"
-    fi
-  done
   if pgrep -af "grasp-server .*--port ${LOCAL_PORT}" >/dev/null 2>&1; then
     echo "port ${LOCAL_PORT} owner(s):"
     pgrep -af "grasp-server .*--port ${LOCAL_PORT}" || true
