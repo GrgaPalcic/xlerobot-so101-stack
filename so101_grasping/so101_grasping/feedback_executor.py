@@ -81,7 +81,14 @@ class FeedbackArmExecutor:
         self._solver = PlacoKinematics(
             urdf_path=str(model.urdf_path),
             ee_frame=ee_frame,
-            cfg=PlacoConfig(dt=1.0 / 50.0),
+            # Match the SO-101 grasp primitive: solve EE position first, then
+            # stream the measured-joint correction with explicit timing.
+            cfg=PlacoConfig(
+                dt=1.0 / 50.0,
+                rot_weight=0.0,
+                enable_velocity_limits=False,
+                enable_self_collisions=False,
+            ),
         )
         self._joint_names = list(self._solver.joint_names)
         self._arm_indices = [self._joint_names.index(name) for name in self._arm_joint_names]
@@ -207,8 +214,10 @@ class FeedbackArmExecutor:
         saw_wrist_delta = False
         for stage in stages:
             result, q_goal = self.solve_stage(stage, q_seed)
-            if result is None or q_goal is None:
+            if result is None:
                 return [], f"{stage.name}: feedback IK failed", None
+            if q_goal is None:
+                return [], f"{stage.name}: {result.message}", None
             wrist_delta = self._wrist_roll_delta(q_goal, reference_wrist_roll)
             if wrist_delta is not None:
                 saw_wrist_delta = True
