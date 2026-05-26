@@ -123,13 +123,13 @@ stop_stack() {
   pkill -TERM -f "xlerobot_grasp_runtime.launch.py.*side:=${side}" 2>/dev/null || true
   pkill -TERM -f "__ns:=/${side}_grasp" 2>/dev/null || true
   pkill -TERM -f "__ns:=/${side}" 2>/dev/null || true
-  pkill -TERM -f "__ns:=/center_gopro.*xlerobot_opencv_cam.yaml" 2>/dev/null || true
+  pkill -TERM -f "xlerobot_opencv_cam.yaml" 2>/dev/null || true
   pkill -TERM -f "__node:=xlerobot_" 2>/dev/null || true
   sleep 2
   pkill -KILL -f "xlerobot_grasp_runtime.launch.py.*side:=${side}" 2>/dev/null || true
   pkill -KILL -f "__ns:=/${side}_grasp" 2>/dev/null || true
   pkill -KILL -f "__ns:=/${side}" 2>/dev/null || true
-  pkill -KILL -f "__ns:=/center_gopro.*xlerobot_opencv_cam.yaml" 2>/dev/null || true
+  pkill -KILL -f "xlerobot_opencv_cam.yaml" 2>/dev/null || true
   pkill -KILL -f "__node:=xlerobot_" 2>/dev/null || true
 }
 
