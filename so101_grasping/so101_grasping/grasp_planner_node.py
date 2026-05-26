@@ -117,6 +117,7 @@ class GraspPlannerNode(Node):
         self.declare_parameter("detect_service", "/detect_grasps")
         self.declare_parameter("plan_service", "/plan_grasp")
         self.declare_parameter("allow_execution", False)
+        self.declare_parameter("moveit_node_name", "so101_grasp_moveit_py")
         self.declare_parameter("grasp_frame", BASE_FRAME)
         self.declare_parameter("arm_base_frame", BASE_FRAME)
         self.declare_parameter("moveit_frame", MOVEIT_FRAME)
@@ -128,6 +129,7 @@ class GraspPlannerNode(Node):
         self.declare_parameter("planned_markers_topic", "/so101_grasping/planned_path_markers")
         self.declare_parameter("default_prompt", "pink cube")
         self.declare_parameter("default_top_k", 8)
+        self.declare_parameter("detect_timeout_s", 60.0)
         self.declare_parameter("pregrasp_offset_m", 0.10)
         self.declare_parameter("max_grasp_radius_m", 0.75)
         self.declare_parameter("ik_timeout_s", 0.75)
@@ -177,6 +179,7 @@ class GraspPlannerNode(Node):
         )
 
         self._allow_execution = bool(self.get_parameter("allow_execution").value)
+        self._moveit_node_name = str(self.get_parameter("moveit_node_name").value)
         self._grasp_frame = str(self.get_parameter("grasp_frame").value)
         self._arm_base_frame = str(self.get_parameter("arm_base_frame").value)
         self._moveit_frame = str(self.get_parameter("moveit_frame").value)
@@ -184,6 +187,7 @@ class GraspPlannerNode(Node):
         self._joint_states_topic = str(self.get_parameter("joint_states_topic").value)
         self._default_prompt = str(self.get_parameter("default_prompt").value)
         self._default_top_k = int(self.get_parameter("default_top_k").value)
+        self._detect_timeout_s = max(1.0, float(self.get_parameter("detect_timeout_s").value))
         self._default_pregrasp_offset_m = float(self.get_parameter("pregrasp_offset_m").value)
         self._max_grasp_radius_m = float(self.get_parameter("max_grasp_radius_m").value)
         self._ik_timeout_s = float(self.get_parameter("ik_timeout_s").value)
@@ -314,7 +318,7 @@ class GraspPlannerNode(Node):
 
         self.get_logger().info("Initializing MoveItPy grasp planner")
         self._moveit = MoveItPy(
-            node_name="so101_grasp_moveit_py",
+            node_name=self._moveit_node_name,
             remappings={"joint_states": self._joint_states_topic},
         )
         joint_model_group = self._moveit.get_robot_model().get_joint_model_group(PLANNING_GROUP)
@@ -368,6 +372,13 @@ class GraspPlannerNode(Node):
             return response
         try:
             return self._plan_grasp_locked(request, response)
+        except Exception as exc:  # noqa: BLE001 - service callbacks must not kill the planner node.
+            self.get_logger().exception(f"plan_grasp failed: {exc}")
+            response.success = False
+            response.planned = False
+            response.executed = False
+            response.message = f"plan_grasp failed: {exc}"
+            return response
         finally:
             self._plan_lock.release()
 
@@ -386,7 +397,8 @@ class GraspPlannerNode(Node):
         )
         plan_deadline = time.monotonic() + max(1.0, plan_budget_s)
 
-        detect_response = self._detect_grasps(prompt, top_k)
+        detect_timeout_s = min(self._detect_timeout_s, max(1.0, plan_deadline - time.monotonic()))
+        detect_response = self._detect_grasps(prompt, top_k, timeout_s=detect_timeout_s)
         if not detect_response.success:
             response.success = False
             response.message = f"detect_grasps failed: {detect_response.message}"
@@ -573,18 +585,19 @@ class GraspPlannerNode(Node):
             stripped = stripped[1:]
         return stripped
 
-    def _detect_grasps(self, prompt: str, top_k: int):
+    def _detect_grasps(self, prompt: str, top_k: int, timeout_s: float | None = None):
         if not self._detect_client.wait_for_service(timeout_sec=5.0):
             raise RuntimeError("/detect_grasps service is not available")
         request = DetectGrasps.Request()
         request.prompt = prompt
         request.top_k = top_k
         future = self._detect_client.call_async(request)
-        deadline = time.monotonic() + 180.0
+        timeout_s = self._detect_timeout_s if timeout_s is None else max(1.0, float(timeout_s))
+        deadline = time.monotonic() + timeout_s
         while rclpy.ok() and not future.done() and time.monotonic() < deadline:
             time.sleep(0.05)
         if not future.done():
-            raise TimeoutError("/detect_grasps timed out")
+            raise TimeoutError(f"/detect_grasps timed out after {timeout_s:.1f}s")
         return future.result()
 
     def _wrist_refine_target(self, grasp: GraspCandidate) -> np.ndarray:

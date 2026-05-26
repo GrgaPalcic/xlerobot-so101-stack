@@ -1242,6 +1242,7 @@ def generate_grasp_runtime_config(state: dict[str, Any]) -> list[Path]:
         wrist_yaml = out / "extrinsics" / f"{side}_wrist_camera_in_gripper.yaml"
         if not wrist_yaml.exists():
             raise StepError(f"missing wrist camera extrinsic for {side}: {wrist_yaml}")
+        other_side = "right" if side == "left" else "left"
 
         grasping = {
             f"/{side}_grasp/grasp_request_node": {
@@ -1265,8 +1266,10 @@ def generate_grasp_runtime_config(state: dict[str, Any]) -> list[Path]:
                     "detect_service": f"/{side}_grasp/detect_grasps",
                     "plan_service": f"/{side}_grasp/plan_grasp",
                     "allow_execution": False,
+                    "moveit_node_name": f"{side}_grasp_moveit_py",
                     "default_prompt": default_prompt,
                     "default_top_k": default_top_k,
+                    "detect_timeout_s": 60.0,
                     "grasp_frame": "world",
                     "arm_base_frame": f"{side}/base_link",
                     "moveit_frame": "base_link",
@@ -1286,6 +1289,29 @@ def generate_grasp_runtime_config(state: dict[str, Any]) -> list[Path]:
         grasping_path = config_dir / f"{side}_grasp_runtime.yaml"
         grasping_path.write_text(yaml.safe_dump(grasping, sort_keys=False), encoding="utf-8")
         artifacts.append(grasping_path)
+
+        side_cameras = {
+            "cameras": [
+                {
+                    "name": "cam_wrist",
+                    "camera_type": "opencv_compressed",
+                    "param_path": str(config_dir / "xlerobot_opencv_cam.yaml"),
+                    "namespace": side,
+                    "camera_info_url": "file://" + str(cfg[f"{side}_wrist_info"]),
+                },
+                {
+                    "name": "cam_overhead",
+                    "camera_type": "opencv_compressed",
+                    "param_path": str(config_dir / "xlerobot_opencv_cam.yaml"),
+                    "namespace": "center_gopro",
+                    "camera_info_url": "file://" + str(cfg["center_gopro_info"]),
+                },
+            ],
+            "omitted_camera_namespace": other_side,
+        }
+        side_cameras_path = config_dir / f"{side}_grasp_cameras.yaml"
+        side_cameras_path.write_text(yaml.safe_dump(side_cameras, sort_keys=False), encoding="utf-8")
+        artifacts.append(side_cameras_path)
 
         controllers_path = config_dir / f"{side}_moveit_controllers.yaml"
         controllers_path.write_text(

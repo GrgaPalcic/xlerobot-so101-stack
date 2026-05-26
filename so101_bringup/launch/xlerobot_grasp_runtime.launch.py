@@ -44,6 +44,15 @@ def _load_transform_args(path: Path, *, child_override: str | None = None) -> li
     ]
 
 
+def _write_moveit_py_params(path: Path, *, node_name: str, params: dict) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump({f"/{node_name}": {"ros__parameters": params}}, sort_keys=False),
+        encoding="utf-8",
+    )
+    return str(path)
+
+
 def _runtime_nodes(context):
     side = LaunchConfiguration("side").perform(context)
     out_dir = Path(LaunchConfiguration("out_dir").perform(context))
@@ -121,10 +130,19 @@ def _runtime_nodes(context):
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory("so101_bringup"), "launch", "cameras.launch.py")
         ),
-        launch_arguments={"cameras_config": str(config_dir / "xlerobot_cameras.yaml")}.items(),
+        launch_arguments={
+            "cameras_config": str(config_dir / f"{side}_grasp_cameras.yaml"),
+        }.items(),
     )
 
     grasp_runtime_params = str(config_dir / f"{side}_grasp_runtime.yaml")
+    moveit_node_name = f"{side}_grasp_moveit_py"
+    moveit_dict = moveit_config.to_dict()
+    moveit_py_params = _write_moveit_py_params(
+        config_dir / f"{side}_moveit_py_runtime_params.yaml",
+        node_name=moveit_node_name,
+        params=moveit_dict,
+    )
     request_node = Node(
         package="so101_grasping",
         executable="grasp_request_node",
@@ -139,9 +157,10 @@ def _runtime_nodes(context):
         namespace=f"{side}_grasp",
         name="grasp_planner_node",
         parameters=[
-            moveit_config.to_dict(),
+            moveit_py_params,
+            moveit_dict,
             grasp_runtime_params,
-            {"allow_execution": allow_execution_bool},
+            {"allow_execution": allow_execution_bool, "moveit_node_name": moveit_node_name},
         ],
         output="screen",
     )

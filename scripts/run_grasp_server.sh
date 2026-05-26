@@ -49,6 +49,8 @@ SUPPORT_PLANE_CLEARANCE_M="${SUPPORT_PLANE_CLEARANCE_M:-0.003}"
 SUPPORT_PLANE_SNAP_MIN_CORRECTION_M="${SUPPORT_PLANE_SNAP_MIN_CORRECTION_M:-0.005}"
 SUPPORT_PLANE_SNAP_MAX_CORRECTION_M="${SUPPORT_PLANE_SNAP_MAX_CORRECTION_M:-0.40}"
 SUPPORT_PLANE_MIN_GRASP_CLEARANCE_M="${SUPPORT_PLANE_MIN_GRASP_CLEARANCE_M:--0.30}"
+CUDA_EMPTY_CACHE="${CUDA_EMPTY_CACHE:-true}"
+PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True,max_split_size_mb:128}"
 
 if [[ ! -x "${VENV_PATH}/bin/grasp-server" ]]; then
     echo "grasp-server console script not found in ${VENV_PATH}" >&2
@@ -57,6 +59,7 @@ fi
 
 export PYTHONUNBUFFERED=1
 export PYTHONPATH="${REPO_ROOT}/grasp_server:${PYTHONPATH:-}"
+export PYTORCH_CUDA_ALLOC_CONF
 
 if [[ "${M2T2_APPLY_BOUNDS}" == "0" || "${M2T2_APPLY_BOUNDS}" == "false" || "${M2T2_APPLY_BOUNDS}" == "False" ]]; then
     M2T2_APPLY_BOUNDS_FLAG="--no-m2t2-apply-bounds"
@@ -77,6 +80,11 @@ if [[ "${SUPPORT_PLANE_SNAP}" == "0" || "${SUPPORT_PLANE_SNAP}" == "false" || "$
     SUPPORT_PLANE_SNAP_FLAG="--no-support-plane-snap"
 else
     SUPPORT_PLANE_SNAP_FLAG="--support-plane-snap"
+fi
+if [[ "${CUDA_EMPTY_CACHE}" == "0" || "${CUDA_EMPTY_CACHE}" == "false" || "${CUDA_EMPTY_CACHE}" == "False" ]]; then
+    CUDA_EMPTY_CACHE_FLAG="--no-cuda-empty-cache"
+else
+    CUDA_EMPTY_CACHE_FLAG="--cuda-empty-cache"
 fi
 read -r -a WORKSPACE_BOUNDS_ARGS <<< "${WORKSPACE_BOUNDS}"
 
@@ -125,4 +133,5 @@ exec "${VENV_PATH}/bin/grasp-server" \
     --support-plane-snap-min-correction-m "${SUPPORT_PLANE_SNAP_MIN_CORRECTION_M}" \
     --support-plane-snap-max-correction-m "${SUPPORT_PLANE_SNAP_MAX_CORRECTION_M}" \
     --support-plane-min-grasp-clearance-m "${SUPPORT_PLANE_MIN_GRASP_CLEARANCE_M}" \
+    "${CUDA_EMPTY_CACHE_FLAG}" \
     --workspace-bounds "${WORKSPACE_BOUNDS_ARGS[@]}"

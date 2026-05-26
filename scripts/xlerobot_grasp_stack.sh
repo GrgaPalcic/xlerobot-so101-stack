@@ -11,6 +11,9 @@ LOG_DIR="${XLEROBOT_RUN}/logs"
 PID_DIR="${XLEROBOT_RUN}/pids"
 DEFAULT_PROMPT="${DEFAULT_PROMPT:-pink cube}"
 DEFAULT_TOP_K="${DEFAULT_TOP_K:-8}"
+DETECT_CALL_TIMEOUT_S="${DETECT_CALL_TIMEOUT_S:-180}"
+PLAN_CALL_TIMEOUT_S="${PLAN_CALL_TIMEOUT_S:-180}"
+EXECUTE_CALL_TIMEOUT_S="${EXECUTE_CALL_TIMEOUT_S:-300}"
 VERIFY_BOARD_BEFORE_EXECUTE="${VERIFY_BOARD_BEFORE_EXECUTE:-true}"
 BOARD_VERIFY_MAX_MEAN_PX="${BOARD_VERIFY_MAX_MEAN_PX:-3.0}"
 BOARD_VERIFY_MAX_TRANSLATION_M="${BOARD_VERIFY_MAX_TRANSLATION_M:-0.05}"
@@ -117,7 +120,17 @@ stop_stack() {
     fi
     rm -f "${pid_file}"
   fi
-  pkill -f "xlerobot_grasp_runtime.launch.py.*side:=${side}" 2>/dev/null || true
+  pkill -TERM -f "xlerobot_grasp_runtime.launch.py.*side:=${side}" 2>/dev/null || true
+  pkill -TERM -f "__ns:=/${side}_grasp" 2>/dev/null || true
+  pkill -TERM -f "__ns:=/${side}" 2>/dev/null || true
+  pkill -TERM -f "__ns:=/center_gopro.*xlerobot_opencv_cam.yaml" 2>/dev/null || true
+  pkill -TERM -f "__node:=xlerobot_" 2>/dev/null || true
+  sleep 2
+  pkill -KILL -f "xlerobot_grasp_runtime.launch.py.*side:=${side}" 2>/dev/null || true
+  pkill -KILL -f "__ns:=/${side}_grasp" 2>/dev/null || true
+  pkill -KILL -f "__ns:=/${side}" 2>/dev/null || true
+  pkill -KILL -f "__ns:=/center_gopro.*xlerobot_opencv_cam.yaml" 2>/dev/null || true
+  pkill -KILL -f "__node:=xlerobot_" 2>/dev/null || true
 }
 
 wait_for_service() {
@@ -134,22 +147,38 @@ wait_for_service() {
   done
 }
 
+call_ros_service() {
+  local timeout_s="$1"
+  local output_path="$2"
+  shift 2
+  local rc
+  set +e
+  timeout --foreground "${timeout_s}" ros2 service call "$@" | tee "${output_path}"
+  rc=${PIPESTATUS[0]}
+  set -e
+  if (( rc != 0 )); then
+    echo "service call failed or timed out after ${timeout_s}s: $*" >&2
+    tail -120 "${LOG_DIR}/${side}_grasp_stack.log" >&2 || true
+    exit "${rc}"
+  fi
+}
+
 detect() {
   ensure_dirs
   source_ros
   wait_for_service "/${side}_grasp/detect_grasps"
-  ros2 service call "/${side}_grasp/detect_grasps" so101_grasp_msgs/srv/DetectGrasps \
-    "{prompt: '${prompt}', top_k: ${DEFAULT_TOP_K}}" \
-    | tee "${LOG_DIR}/${side}_detect_grasps.txt"
+  call_ros_service "${DETECT_CALL_TIMEOUT_S}" "${LOG_DIR}/${side}_detect_grasps.txt" \
+    "/${side}_grasp/detect_grasps" so101_grasp_msgs/srv/DetectGrasps \
+    "{prompt: '${prompt}', top_k: ${DEFAULT_TOP_K}}"
 }
 
 plan() {
   ensure_dirs
   source_ros
   wait_for_service "/${side}_grasp/plan_grasp"
-  ros2 service call "/${side}_grasp/plan_grasp" so101_grasp_msgs/srv/PlanGrasp \
-    "{prompt: '${prompt}', top_k: ${DEFAULT_TOP_K}, grasp_index: 0, execute: false, pregrasp_offset_m: 0.10, plan_time_s: 30.0}" \
-    | tee "${LOG_DIR}/${side}_plan_grasp.txt"
+  call_ros_service "${PLAN_CALL_TIMEOUT_S}" "${LOG_DIR}/${side}_plan_grasp.txt" \
+    "/${side}_grasp/plan_grasp" so101_grasp_msgs/srv/PlanGrasp \
+    "{prompt: '${prompt}', top_k: ${DEFAULT_TOP_K}, grasp_index: 0, execute: false, pregrasp_offset_m: 0.10, plan_time_s: 30.0}"
 }
 
 verify_board() {
@@ -236,9 +265,9 @@ execute_grasp() {
   wait_for_service "/${side}_grasp/plan_grasp"
   ros2 param set "/${side}_grasp/grasp_planner_node" allow_execution true >/dev/null
   trap 'ros2 param set "/'"${side}"'_grasp/grasp_planner_node" allow_execution false >/dev/null 2>&1 || true' EXIT
-  ros2 service call "/${side}_grasp/plan_grasp" so101_grasp_msgs/srv/PlanGrasp \
-    "{prompt: '${prompt}', top_k: ${DEFAULT_TOP_K}, grasp_index: 0, execute: true, pregrasp_offset_m: 0.10, plan_time_s: 45.0}" \
-    | tee "${LOG_DIR}/${side}_execute_grasp.txt"
+  call_ros_service "${EXECUTE_CALL_TIMEOUT_S}" "${LOG_DIR}/${side}_execute_grasp.txt" \
+    "/${side}_grasp/plan_grasp" so101_grasp_msgs/srv/PlanGrasp \
+    "{prompt: '${prompt}', top_k: ${DEFAULT_TOP_K}, grasp_index: 0, execute: true, pregrasp_offset_m: 0.10, plan_time_s: 45.0}"
   ros2 param set "/${side}_grasp/grasp_planner_node" allow_execution false >/dev/null || true
   trap - EXIT
 }
