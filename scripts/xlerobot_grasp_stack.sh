@@ -43,10 +43,12 @@ ensure_dirs() {
 }
 
 source_ros() {
+  set +u
   # shellcheck disable=SC1090
   source "${ROS_SETUP}"
   # shellcheck disable=SC1091
   source "${XLEROBOT_WS}/install/setup.bash"
+  set -u
 }
 
 state_value() {
