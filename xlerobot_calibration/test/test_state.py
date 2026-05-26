@@ -11,6 +11,7 @@ from xlerobot_calibration.runner import (
     build_touch_jog_commands,
     build_vision_handeye_commands,
     generate_controller_configs,
+    generate_grasp_runtime_config,
     generate_joint_configs,
     generate_world_files,
     is_missing_config_value,
@@ -256,3 +257,53 @@ def test_workspace_argument_overrides_stale_run_state_workspace(tmp_path: Path):
     loaded = resolve_existing_state(Namespace(out=state["out_dir"]), new_workspace)
 
     assert loaded["workspace"] == str(new_workspace.resolve())
+
+
+def test_generate_grasp_runtime_config(tmp_path: Path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    moveit_config = workspace / "so101_moveit_config/config"
+    moveit_config.mkdir(parents=True)
+    (moveit_config / "moveit_controllers.yaml").write_text(
+        "moveit_simple_controller_manager:\n"
+        "  controller_names:\n"
+        "    - follower/arm_trajectory_controller\n"
+        "  follower/arm_trajectory_controller: {}\n"
+    )
+    (moveit_config / "moveit_py_config.yaml").write_text(
+        "planning_scene_monitor_options:\n  joint_state_topic: /follower/joint_states\n"
+    )
+    state = create_state(workspace, run_id="20260517T000000Z")
+    cfg = state["config"]
+    cfg["left_port"] = "/dev/serial/by-path/left"
+    cfg["right_port"] = "/dev/serial/by-path/right"
+    cfg["left_joint_config"] = str(Path(state["out_dir"]) / "config/left_joints.yaml")
+    cfg["right_joint_config"] = str(Path(state["out_dir"]) / "config/right_joints.yaml")
+    cfg["left_wrist_info"] = str(Path(state["out_dir"]) / "intrinsics/left.yaml")
+    cfg["right_wrist_info"] = str(Path(state["out_dir"]) / "intrinsics/right.yaml")
+    cfg["center_gopro_info"] = str(Path(state["out_dir"]) / "intrinsics/center.yaml")
+    out = Path(state["out_dir"])
+    (out / "extrinsics").mkdir(parents=True, exist_ok=True)
+    for side in ("left", "right"):
+        (out / "extrinsics" / f"{side}_wrist_camera_in_gripper.yaml").write_text(
+            "transform:\n"
+            f"  parent_frame: {side}/gripper_frame_link\n"
+            f"  child_frame: {side}/wrist_camera_optical_frame\n"
+            "  translation_xyz: [0, 0, 0]\n"
+            "  quaternion_xyzw: [0, 0, 0, 1]\n"
+        )
+
+    artifacts = generate_grasp_runtime_config(state)
+
+    names = {path.name for path in artifacts}
+    assert "left_grasp_runtime.yaml" in names
+    assert "right_grasp_runtime.yaml" in names
+    left_grasp = yaml.safe_load((out / "config/left_grasp_runtime.yaml").read_text())
+    params = left_grasp["/left_grasp/grasp_request_node"]["ros__parameters"]
+    assert params["base_frame"] == "world"
+    assert params["wrist_camera_frame"] == "left/wrist_camera_optical_frame"
+    planner = left_grasp["/left_grasp/grasp_planner_node"]["ros__parameters"]
+    assert planner["arm_base_frame"] == "left/base_link"
+    assert planner["joint_states_topic"] == "/left/joint_states"
+    assert "left/arm_trajectory_controller" in (out / "config/left_moveit_controllers.yaml").read_text()
+    assert "/left/joint_states" in (out / "config/left_moveit_py_config.yaml").read_text()

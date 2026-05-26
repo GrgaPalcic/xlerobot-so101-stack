@@ -1013,6 +1013,7 @@ def run_action_step(state: dict[str, Any], step: Step, *, dry_run: bool, yes: bo
         "generate_world_files": generate_world_files,
         "invert_touch_solves": invert_touch_solves,
         "generate_camera_config": generate_camera_config,
+        "generate_grasp_runtime_config": generate_grasp_runtime_config,
         "export_report": export_report,
     }
     action = actions.get(step.action)
@@ -1220,6 +1221,87 @@ def generate_camera_config(state: dict[str, Any]) -> list[Path]:
     params_path.write_text(yaml.safe_dump(params, sort_keys=False), encoding="utf-8")
     cameras_path.write_text(yaml.safe_dump(cameras, sort_keys=False), encoding="utf-8")
     return [params_path, cameras_path]
+
+
+def generate_grasp_runtime_config(state: dict[str, Any]) -> list[Path]:
+    cfg = state["config"]
+    out = Path(state["out_dir"])
+    config_dir = out / "config"
+    artifacts: list[Path] = []
+
+    base_moveit_controllers = Path(state["workspace"]) / "so101_moveit_config/config/moveit_controllers.yaml"
+    base_moveit_py = Path(state["workspace"]) / "so101_moveit_config/config/moveit_py_config.yaml"
+    controllers_template = base_moveit_controllers.read_text(encoding="utf-8")
+    moveit_py_template = base_moveit_py.read_text(encoding="utf-8")
+
+    default_server = str(cfg.get("grasp_server_address", "127.0.0.1:8091"))
+    default_prompt = str(cfg.get("prompt", "pink cube"))
+    default_top_k = int(cfg.get("top_k", 8))
+
+    for side in ("left", "right"):
+        wrist_yaml = out / "extrinsics" / f"{side}_wrist_camera_in_gripper.yaml"
+        if not wrist_yaml.exists():
+            raise StepError(f"missing wrist camera extrinsic for {side}: {wrist_yaml}")
+
+        grasping = {
+            f"/{side}_grasp/grasp_request_node": {
+                "ros__parameters": {
+                    "server_address": default_server,
+                    "recv_timeout_ms": 120000,
+                    "send_timeout_ms": 5000,
+                    "default_top_k": default_top_k,
+                    "max_data_age_s": 0.75,
+                    "base_frame": "world",
+                    "overhead_camera_frame": "center_gopro_optical_frame",
+                    "wrist_camera_frame": f"{side}/wrist_camera_optical_frame",
+                    "overhead_image_topic": "/center_gopro/image_raw/compressed",
+                    "wrist_image_topic": f"/{side}/image_raw/compressed",
+                    "overhead_camera_info_topic": "/center_gopro/camera_info",
+                    "wrist_camera_info_topic": f"/{side}/camera_info",
+                }
+            },
+            f"/{side}_grasp/grasp_planner_node": {
+                "ros__parameters": {
+                    "detect_service": f"/{side}_grasp/detect_grasps",
+                    "plan_service": f"/{side}_grasp/plan_grasp",
+                    "allow_execution": False,
+                    "default_prompt": default_prompt,
+                    "default_top_k": default_top_k,
+                    "grasp_frame": "world",
+                    "arm_base_frame": f"{side}/base_link",
+                    "moveit_frame": "base_link",
+                    "ee_frame": "gripper_frame_link",
+                    "joint_states_topic": f"/{side}/joint_states",
+                    "object_cloud_topic": f"/{side}_grasp/so101_grasping/object_cloud",
+                    "wrist_object_cloud_topic": f"/{side}_grasp/so101_grasping/wrist_object_cloud",
+                    "display_topic": f"/{side}_grasp/so101_grasping/display_planned_path",
+                    "planned_markers_topic": f"/{side}_grasp/so101_grasping/planned_path_markers",
+                    "gripper_action": f"/{side}/gripper_controller/gripper_cmd",
+                    "require_wrist_cloud_for_execution": True,
+                    "wrist_refine_before_grasp": True,
+                }
+            },
+        }
+
+        grasping_path = config_dir / f"{side}_grasp_runtime.yaml"
+        grasping_path.write_text(yaml.safe_dump(grasping, sort_keys=False), encoding="utf-8")
+        artifacts.append(grasping_path)
+
+        controllers_path = config_dir / f"{side}_moveit_controllers.yaml"
+        controllers_path.write_text(
+            controllers_template.replace("follower/", f"{side}/"),
+            encoding="utf-8",
+        )
+        artifacts.append(controllers_path)
+
+        moveit_py_path = config_dir / f"{side}_moveit_py_config.yaml"
+        moveit_py_path.write_text(
+            moveit_py_template.replace("/follower/joint_states", f"/{side}/joint_states"),
+            encoding="utf-8",
+        )
+        artifacts.append(moveit_py_path)
+
+    return artifacts
 
 
 def export_report(state: dict[str, Any]) -> list[Path]:

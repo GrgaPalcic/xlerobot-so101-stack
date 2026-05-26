@@ -22,6 +22,44 @@ Direct TCP from the Dell host into this GPU host is currently blocked on the LAN
 
 The helper script is [scripts/run_grasp_tunnel.sh](../scripts/run_grasp_tunnel.sh).
 
+## Calibrated Runtime
+
+After the XLeRobot calibration run has intrinsics, hand-eye, center GoPro
+extrinsics, and generated camera config, use the short host-specific wrappers.
+
+On the GPU/local host:
+
+```bash
+cd /home/grga/Documents/so101-ros-physical-ai
+./scripts/xlerobot_grasp_gpu.sh up
+```
+
+On the Dell host:
+
+```bash
+cd /home/dell/Documents/xlerobot-so101-stack
+./scripts/xlerobot_grasp_stack.sh up right
+./scripts/xlerobot_grasp_stack.sh detect right "pink cube"
+./scripts/xlerobot_grasp_stack.sh plan right "pink cube"
+./scripts/xlerobot_grasp_stack.sh execute right "pink cube"
+```
+
+Use `detect` and `plan` for either side, but real execution defaults to the
+right arm only. This avoids two arms competing for an ambiguous target when
+there are multiple similar objects, such as two pink cubes. `execute` first
+verifies the fixed ChArUco board from the center GoPro against the accepted
+calibration, then requires typing `EXECUTE` before it enables planner execution
+for that one service call. This board check catches camera/world drift; the
+wrist-refine stage re-detects the object before descent to catch local
+object/arm error.
+
+Stop the runtime:
+
+```bash
+./scripts/xlerobot_grasp_stack.sh down left
+./scripts/xlerobot_grasp_gpu.sh down
+```
+
 ## GPU Host
 
 ### Runtime scripts
@@ -32,6 +70,10 @@ The helper script is [scripts/run_grasp_tunnel.sh](../scripts/run_grasp_tunnel.s
   - uses DA3 camera-token conditioning from calibrated intrinsics and optical-frame TF
   - defaults to `checkpoint-rs.tar` under `/home/grga/Documents/graspnet-baseline`
   - supports `GRASP_BACKEND=m2t2` with `M2T2_URL=http://<host>:8123`
+- [scripts/xlerobot_grasp_gpu.sh](../scripts/xlerobot_grasp_gpu.sh)
+  - syncs the current support-plane calibration from Dell
+  - starts the GPU server with calibrated DA3 and GGCNN defaults
+  - opens the reverse SSH tunnel to the Dell
 - [scripts/run_grasp_tunnel.sh](../scripts/run_grasp_tunnel.sh)
   - keeps `127.0.0.1:8091` on the Dell host forwarded back to this machine
 - [scripts/build_graspnet_extensions.sh](../scripts/build_graspnet_extensions.sh)
@@ -178,7 +220,7 @@ The ROS client package stays in the repo workspace at `/home/dell/Documents/so10
 Launch manually on the Dell host:
 
 ```bash
-~/Documents/so101-ros-physical-ai/scripts/run_grasping_stack.sh
+~/Documents/xlerobot-so101-stack/scripts/xlerobot_grasp_stack.sh up left
 ```
 
 Or from this machine:

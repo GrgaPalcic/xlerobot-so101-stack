@@ -1123,6 +1123,16 @@ left/right do not swap devices
 On the GPU/local side, run the server with `world` as the request base frame.
 This avoids left/right support-plane mismatch and gives one common scene frame.
 
+Preferred short command:
+
+```bash
+cd /home/grga/Documents/so101-ros-physical-ai
+./scripts/xlerobot_grasp_gpu.sh up
+```
+
+The wrapper syncs `world_support_plane.yaml` from the Dell run, starts the DA3
++ GGCNN grasp server, and opens the reverse tunnel back to Dell.
+
 ```bash
 cd /home/grga/Documents/so101-ros-physical-ai
 
@@ -1145,6 +1155,23 @@ If the Dell reaches the GPU through the reverse tunnel, also start the tunnel
 as described in `docs/grasping_stack.md`.
 
 ## Grasp Request Nodes
+
+Preferred short commands on Dell:
+
+```bash
+cd /home/dell/Documents/xlerobot-so101-stack
+./scripts/xlerobot_grasp_stack.sh up right
+./scripts/xlerobot_grasp_stack.sh detect right "pink cube"
+./scripts/xlerobot_grasp_stack.sh plan right "pink cube"
+./scripts/xlerobot_grasp_stack.sh execute right "pink cube"
+```
+
+Use `detect` and `plan` for either side, but real execution defaults to the
+right arm only. This avoids two arms competing for an ambiguous target when
+there are multiple similar objects, such as two pink cubes. The `execute`
+command runs a fixed-board GoPro/ChArUco verification before motion and then
+requires typing `EXECUTE`. That check catches world/camera drift; the
+wrist-refine stage re-detects the object before descent.
 
 Run one request node per arm side, but keep `base_frame:=world` so the server
 gets both wrist and GoPro views in the same calibrated frame.

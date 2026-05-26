@@ -20,38 +20,54 @@ from so101_grasp_msgs.srv import DetectGrasps
 from tf2_ros import Buffer, TransformListener
 
 
-IMAGE_TOPICS = {
-    "input_overhead.jpg": "/static_camera/image_raw/compressed",
-    "input_wrist.jpg": "/follower/image_raw/compressed",
-    "overhead_mask.png": "/so101_grasping/overhead_mask/compressed",
-    "wrist_mask.png": "/so101_grasping/wrist_mask/compressed",
-    "overhead_depth.png": "/so101_grasping/overhead_depth/compressed",
-    "wrist_depth.png": "/so101_grasping/wrist_depth/compressed",
-    "overhead_masked_depth.png": "/so101_grasping/overhead_masked_depth/compressed",
-    "wrist_masked_depth.png": "/so101_grasping/wrist_masked_depth/compressed",
-    "ggcnn_quality.png": "/so101_grasping/ggcnn_quality/compressed",
-    "ggcnn_angle.png": "/so101_grasping/ggcnn_angle/compressed",
-    "ggcnn_overlay.png": "/so101_grasping/ggcnn_overlay/compressed",
-    "ggcnn_depth_input.png": "/so101_grasping/ggcnn_depth_input/compressed",
-}
+def _default_image_topics(side: str, grasp_ns: str) -> dict[str, str]:
+    grasp_prefix = f"/{grasp_ns}/so101_grasping"
+    return {
+        "input_overhead.jpg": "/center_gopro/image_raw/compressed",
+        "input_wrist.jpg": f"/{side}/image_raw/compressed",
+        "overhead_mask.png": f"{grasp_prefix}/overhead_mask/compressed",
+        "wrist_mask.png": f"{grasp_prefix}/wrist_mask/compressed",
+        "overhead_depth.png": f"{grasp_prefix}/overhead_depth/compressed",
+        "wrist_depth.png": f"{grasp_prefix}/wrist_depth/compressed",
+        "overhead_masked_depth.png": f"{grasp_prefix}/overhead_masked_depth/compressed",
+        "wrist_masked_depth.png": f"{grasp_prefix}/wrist_masked_depth/compressed",
+        "ggcnn_quality.png": f"{grasp_prefix}/ggcnn_quality/compressed",
+        "ggcnn_angle.png": f"{grasp_prefix}/ggcnn_angle/compressed",
+        "ggcnn_overlay.png": f"{grasp_prefix}/ggcnn_overlay/compressed",
+        "ggcnn_depth_input.png": f"{grasp_prefix}/ggcnn_depth_input/compressed",
+    }
 
-CLOUD_TOPICS = {
-    "object_cloud": "/so101_grasping/object_cloud",
-    "overhead_object_cloud": "/so101_grasping/overhead_object_cloud",
-    "wrist_object_cloud": "/so101_grasping/wrist_object_cloud",
-}
+
+def _default_cloud_topics(grasp_ns: str) -> dict[str, str]:
+    grasp_prefix = f"/{grasp_ns}/so101_grasping"
+    return {
+        "object_cloud": f"{grasp_prefix}/object_cloud",
+        "overhead_object_cloud": f"{grasp_prefix}/overhead_object_cloud",
+        "wrist_object_cloud": f"{grasp_prefix}/wrist_object_cloud",
+    }
 
 
 class StackLayerCapture(Node):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        service: str,
+        image_topics: dict[str, str],
+        cloud_topics: dict[str, str],
+        base_frame: str,
+        pose_frames: list[str],
+    ) -> None:
         super().__init__("so101_stack_layers_capture")
         self.images: dict[str, bytes] = {}
         self.clouds: dict[str, np.ndarray] = {}
-        self.client = self.create_client(DetectGrasps, "/detect_grasps")
+        self.service = service
+        self.base_frame = base_frame
+        self.pose_frames = pose_frames
+        self.client = self.create_client(DetectGrasps, service)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self, spin_thread=False)
 
-        for name, topic in IMAGE_TOPICS.items():
+        for name, topic in image_topics.items():
             self.create_subscription(
                 CompressedImage,
                 topic,
@@ -59,7 +75,7 @@ class StackLayerCapture(Node):
                 qos_profile_sensor_data,
             )
 
-        for name, topic in CLOUD_TOPICS.items():
+        for name, topic in cloud_topics.items():
             self.create_subscription(
                 PointCloud2,
                 topic,
@@ -79,7 +95,7 @@ class StackLayerCapture(Node):
 
     def lookup_pose(self, target_frame: str) -> dict[str, object]:
         transform = self.tf_buffer.lookup_transform(
-            "follower/base_link",
+            self.base_frame,
             target_frame,
             Time(),
             timeout=Duration(seconds=1.0),
@@ -87,7 +103,7 @@ class StackLayerCapture(Node):
         translation = transform.transform.translation
         rotation = transform.transform.rotation
         return {
-            "frame_id": "follower/base_link",
+            "frame_id": self.base_frame,
             "child_frame_id": target_frame,
             "position": [float(translation.x), float(translation.y), float(translation.z)],
             "orientation_xyzw": [float(rotation.x), float(rotation.y), float(rotation.z), float(rotation.w)],
@@ -105,7 +121,7 @@ def _wait_for_live_inputs(node: StackLayerCapture, timeout_s: float) -> None:
 
 def _call_grasp_service(node: StackLayerCapture, prompt: str, top_k: int, timeout_s: float):
     if not node.client.wait_for_service(timeout_sec=10.0):
-        raise RuntimeError("/detect_grasps service is not available")
+        raise RuntimeError(f"{node.service} service is not available")
 
     request = DetectGrasps.Request()
     request.prompt = prompt
@@ -115,7 +131,7 @@ def _call_grasp_service(node: StackLayerCapture, prompt: str, top_k: int, timeou
     while rclpy.ok() and not future.done() and time.monotonic() < deadline:
         rclpy.spin_once(node, timeout_sec=0.1)
     if not future.done():
-        raise TimeoutError("/detect_grasps timed out")
+        raise TimeoutError(f"{node.service} timed out")
     return future.result()
 
 
@@ -155,11 +171,7 @@ def _write_outputs(node: StackLayerCapture, response, out_dir: Path, prompt: str
         )
 
     poses: dict[str, object] = {}
-    for frame in (
-        "follower/gripper_frame_link",
-        "follower/wrist_camera_optical_frame",
-        "follower/static_camera_optical_frame",
-    ):
+    for frame in node.pose_frames:
         try:
             poses[frame] = node.lookup_pose(frame)
         except Exception as exc:  # noqa: BLE001 - saved as debug metadata
@@ -201,13 +213,38 @@ def _write_outputs(node: StackLayerCapture, response, out_dir: Path, prompt: str
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out-dir", default="/tmp/so101_stack_layers_live")
+    parser.add_argument("--side", choices=("left", "right"), default="left")
+    parser.add_argument("--grasp-namespace", default="", help="Defaults to <side>_grasp")
+    parser.add_argument("--service", default="", help="Defaults to /<side>_grasp/detect_grasps")
+    parser.add_argument("--base-frame", default="world")
+    parser.add_argument("--overhead-image-topic", default="/center_gopro/image_raw/compressed")
+    parser.add_argument("--wrist-image-topic", default="", help="Defaults to /<side>/image_raw/compressed")
     parser.add_argument("--prompt", default="pink cube")
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--service-timeout-s", type=float, default=180.0)
     args = parser.parse_args()
 
+    grasp_ns = args.grasp_namespace or f"{args.side}_grasp"
+    service = args.service or f"/{grasp_ns}/detect_grasps"
+    image_topics = _default_image_topics(args.side, grasp_ns)
+    image_topics["input_overhead.jpg"] = args.overhead_image_topic
+    if args.wrist_image_topic:
+        image_topics["input_wrist.jpg"] = args.wrist_image_topic
+    cloud_topics = _default_cloud_topics(grasp_ns)
+    pose_frames = [
+        f"{args.side}/gripper_frame_link",
+        f"{args.side}/wrist_camera_optical_frame",
+        "center_gopro_optical_frame",
+    ]
+
     rclpy.init()
-    node = StackLayerCapture()
+    node = StackLayerCapture(
+        service=service,
+        image_topics=image_topics,
+        cloud_topics=cloud_topics,
+        base_frame=args.base_frame,
+        pose_frames=pose_frames,
+    )
     try:
         _wait_for_live_inputs(node, timeout_s=20.0)
         response = _call_grasp_service(node, args.prompt, args.top_k, args.service_timeout_s)

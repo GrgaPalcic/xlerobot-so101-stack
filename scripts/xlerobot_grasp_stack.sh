@@ -1,0 +1,271 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+XLEROBOT_WS="${XLEROBOT_WS:-/home/dell/Documents/xlerobot-so101-stack}"
+if [[ -z "${XLEROBOT_RUN:-}" ]]; then
+  XLEROBOT_RUN="$(find "${XLEROBOT_WS}/field_runs" -maxdepth 1 -type d -name 'xlerobot_*' | sort | tail -n 1)"
+fi
+ROS_SETUP="${ROS_SETUP:-/opt/ros/jazzy/setup.bash}"
+GRASP_SERVER_ADDRESS="${GRASP_SERVER_ADDRESS:-127.0.0.1:8091}"
+LOG_DIR="${XLEROBOT_RUN}/logs"
+PID_DIR="${XLEROBOT_RUN}/pids"
+DEFAULT_PROMPT="${DEFAULT_PROMPT:-pink cube}"
+DEFAULT_TOP_K="${DEFAULT_TOP_K:-8}"
+VERIFY_BOARD_BEFORE_EXECUTE="${VERIFY_BOARD_BEFORE_EXECUTE:-true}"
+BOARD_VERIFY_MAX_MEAN_PX="${BOARD_VERIFY_MAX_MEAN_PX:-3.0}"
+BOARD_VERIFY_MAX_TRANSLATION_M="${BOARD_VERIFY_MAX_TRANSLATION_M:-0.05}"
+BOARD_VERIFY_MAX_ROTATION_DEG="${BOARD_VERIFY_MAX_ROTATION_DEG:-8.0}"
+EXECUTE_SIDE="${EXECUTE_SIDE:-right}"
+ALLOW_NONDEFAULT_EXECUTE="${ALLOW_NONDEFAULT_EXECUTE:-false}"
+
+usage() {
+  cat <<EOF
+usage: $0 up|detect|plan|execute|snapshot|verify-board|status|down left|right [prompt]
+
+Examples:
+  $0 up left
+  $0 detect left "pink cube"
+  $0 plan left "pink cube"
+  $0 execute left "pink cube"
+  $0 down left
+EOF
+}
+
+side="${2:-}"
+if [[ "${side}" != "left" && "${side}" != "right" && "${1:-}" != "status" ]]; then
+  usage
+  exit 2
+fi
+prompt="${3:-${DEFAULT_PROMPT}}"
+
+ensure_dirs() {
+  mkdir -p "${LOG_DIR}" "${PID_DIR}" "${XLEROBOT_RUN}/grasp/${side}"
+}
+
+source_ros() {
+  # shellcheck disable=SC1090
+  source "${ROS_SETUP}"
+  # shellcheck disable=SC1091
+  source "${XLEROBOT_WS}/install/setup.bash"
+}
+
+state_value() {
+  python3 - "$XLEROBOT_RUN/run_state.yaml" "$1" <<'PY'
+import sys, yaml
+state = yaml.safe_load(open(sys.argv[1], "r", encoding="utf-8")) or {}
+print(state.get("config", {}).get(sys.argv[2], ""))
+PY
+}
+
+ensure_runtime_config() {
+  source_ros
+  ros2 run xlerobot_calibration xlerobot-calib \
+    --workspace "${XLEROBOT_WS}" \
+    --out "${XLEROBOT_RUN}" \
+    run-step generate_grasp_runtime_config \
+    --yes >/dev/null
+}
+
+start_stack() {
+  ensure_dirs
+  ensure_runtime_config
+  if [[ -s "${PID_DIR}/grasp_${side}.pid" ]] && kill -0 "$(cat "${PID_DIR}/grasp_${side}.pid")" 2>/dev/null; then
+    echo "${side} grasp stack already running: pid $(cat "${PID_DIR}/grasp_${side}.pid")"
+    return
+  fi
+  source_ros
+  local port
+  port="$(state_value "${side}_port")"
+  if [[ -z "${port}" ]]; then
+    echo "missing ${side}_port in ${XLEROBOT_RUN}/run_state.yaml" >&2
+    exit 1
+  fi
+  (
+    cd "${XLEROBOT_WS}"
+    ros2 launch so101_bringup xlerobot_grasp_runtime.launch.py \
+      side:="${side}" \
+      out_dir:="${XLEROBOT_RUN}" \
+      "${side}_port:=${port}" \
+      grasp_server_address:="${GRASP_SERVER_ADDRESS}" \
+      allow_execution:=false \
+      use_rviz:=false
+  ) >"${LOG_DIR}/${side}_grasp_stack.log" 2>&1 &
+  echo $! > "${PID_DIR}/grasp_${side}.pid"
+  echo "started ${side} grasp stack: pid $(cat "${PID_DIR}/grasp_${side}.pid")"
+  echo "log: ${LOG_DIR}/${side}_grasp_stack.log"
+}
+
+stop_stack() {
+  ensure_dirs
+  local pid_file="${PID_DIR}/grasp_${side}.pid"
+  if [[ -s "${pid_file}" ]]; then
+    local pid
+    pid="$(cat "${pid_file}")"
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill "${pid}" 2>/dev/null || true
+      sleep 2
+      kill -9 "${pid}" 2>/dev/null || true
+    fi
+    rm -f "${pid_file}"
+  fi
+  pkill -f "xlerobot_grasp_runtime.launch.py.*side:=${side}" 2>/dev/null || true
+}
+
+wait_for_service() {
+  source_ros
+  local service="$1"
+  local deadline=$((SECONDS + 45))
+  until ros2 service list | grep -qx "${service}"; do
+    if (( SECONDS > deadline )); then
+      echo "service not available: ${service}" >&2
+      tail -80 "${LOG_DIR}/${side}_grasp_stack.log" >&2 || true
+      exit 1
+    fi
+    sleep 1
+  done
+}
+
+detect() {
+  ensure_dirs
+  source_ros
+  wait_for_service "/${side}_grasp/detect_grasps"
+  ros2 service call "/${side}_grasp/detect_grasps" so101_grasp_msgs/srv/DetectGrasps \
+    "{prompt: '${prompt}', top_k: ${DEFAULT_TOP_K}}" \
+    | tee "${LOG_DIR}/${side}_detect_grasps.txt"
+}
+
+plan() {
+  ensure_dirs
+  source_ros
+  wait_for_service "/${side}_grasp/plan_grasp"
+  ros2 service call "/${side}_grasp/plan_grasp" so101_grasp_msgs/srv/PlanGrasp \
+    "{prompt: '${prompt}', top_k: ${DEFAULT_TOP_K}, grasp_index: 0, execute: false, pregrasp_offset_m: 0.10, plan_time_s: 30.0}" \
+    | tee "${LOG_DIR}/${side}_plan_grasp.txt"
+}
+
+verify_board() {
+  ensure_dirs
+  source_ros
+  local out_dir="${XLEROBOT_RUN}/grasp/${side}/board_verify"
+  mkdir -p "${out_dir}"
+  local stamp image output overlay frame
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  image="${out_dir}/center_gopro_world_board_${stamp}.jpg"
+  output="${out_dir}/center_gopro_in_world_${stamp}.yaml"
+  overlay="${out_dir}/center_gopro_world_board_overlay_${stamp}.jpg"
+  frame="${out_dir}/center_gopro_world_board_frame_${stamp}.jpg"
+  local gopro_dev
+  gopro_dev="$(state_value center_gopro_dev)"
+  ffmpeg -y -f v4l2 -input_format yuyv422 -video_size 1280x720 \
+    -i "${gopro_dev}" -frames:v 1 "${image}" >/dev/null 2>"${out_dir}/ffmpeg_${stamp}.log"
+  python3 "${XLEROBOT_WS}/scripts/solve_camera_extrinsics_from_board.py" \
+    --image "${image}" \
+    --camera-name center_gopro_optical_frame \
+    --camera-info "$(state_value center_gopro_info)" \
+    --board-in-base "${XLEROBOT_RUN}/extrinsics/world_board_identity.yaml" \
+    --output "${output}" \
+    --overlay-output "${overlay}" \
+    --frame-output "${frame}" \
+    --parent-frame world \
+    --cols "$(state_value world_cols)" \
+    --rows "$(state_value world_rows)" \
+    --square-m "$(state_value world_square_m)" \
+    --marker-m "$(state_value world_marker_m)" \
+    --start-id "$(state_value world_start_id)" \
+    --marker-count "$(state_value world_marker_count)" \
+    --aruco-dict "$(state_value world_dict)" \
+    --min-markers 8 | tee "${out_dir}/solve_${stamp}.log"
+  python3 - "${XLEROBOT_RUN}/extrinsics/center_gopro_in_world.yaml" "${output}" \
+    "${BOARD_VERIFY_MAX_MEAN_PX}" "${BOARD_VERIFY_MAX_TRANSLATION_M}" "${BOARD_VERIFY_MAX_ROTATION_DEG}" <<'PY'
+import math, sys, yaml
+import numpy as np
+
+base = yaml.safe_load(open(sys.argv[1], "r", encoding="utf-8"))
+new = yaml.safe_load(open(sys.argv[2], "r", encoding="utf-8"))
+max_mean = float(sys.argv[3])
+max_translation = float(sys.argv[4])
+max_rotation = math.radians(float(sys.argv[5]))
+
+def mat(data):
+    t = data["transform"]
+    m = np.eye(4)
+    m[:3, :3] = np.asarray(t["rotation_matrix"], dtype=float)
+    m[:3, 3] = np.asarray(t["translation_xyz"], dtype=float)
+    return m
+
+base_m = mat(base)
+new_m = mat(new)
+delta = np.linalg.inv(base_m) @ new_m
+translation = float(np.linalg.norm(delta[:3, 3]))
+trace = float(np.clip((np.trace(delta[:3, :3]) - 1.0) * 0.5, -1.0, 1.0))
+rotation = float(math.acos(trace))
+mean = float(new.get("quality", {}).get("mean_reprojection_error_px", 999.0))
+print(f"board verify: mean={mean:.3f}px translation_delta={translation:.4f}m rotation_delta={math.degrees(rotation):.2f}deg")
+if mean > max_mean or translation > max_translation or rotation > max_rotation:
+    raise SystemExit("board verification failed")
+PY
+}
+
+execute_grasp() {
+  ensure_dirs
+  if [[ "${side}" != "${EXECUTE_SIDE}" && "${ALLOW_NONDEFAULT_EXECUTE}" != "true" && "${ALLOW_NONDEFAULT_EXECUTE}" != "1" ]]; then
+    echo "refusing ${side} execution: default real execution side is ${EXECUTE_SIDE}" >&2
+    echo "This avoids two arms competing for an ambiguous object such as one of multiple pink cubes." >&2
+    echo "Set ALLOW_NONDEFAULT_EXECUTE=true only after assigning distinct targets." >&2
+    exit 1
+  fi
+  if [[ "${VERIFY_BOARD_BEFORE_EXECUTE}" == "true" || "${VERIFY_BOARD_BEFORE_EXECUTE}" == "1" ]]; then
+    verify_board
+  fi
+  echo "About to command the real ${side} arm using prompt: ${prompt}"
+  read -r -p "Type EXECUTE to confirm the workspace is clear: " answer
+  if [[ "${answer}" != "EXECUTE" ]]; then
+    echo "operator declined execution"
+    exit 1
+  fi
+  source_ros
+  wait_for_service "/${side}_grasp/plan_grasp"
+  ros2 param set "/${side}_grasp/grasp_planner_node" allow_execution true >/dev/null
+  trap 'ros2 param set "/'"${side}"'_grasp/grasp_planner_node" allow_execution false >/dev/null 2>&1 || true' EXIT
+  ros2 service call "/${side}_grasp/plan_grasp" so101_grasp_msgs/srv/PlanGrasp \
+    "{prompt: '${prompt}', top_k: ${DEFAULT_TOP_K}, grasp_index: 0, execute: true, pregrasp_offset_m: 0.10, plan_time_s: 45.0}" \
+    | tee "${LOG_DIR}/${side}_execute_grasp.txt"
+  ros2 param set "/${side}_grasp/grasp_planner_node" allow_execution false >/dev/null || true
+  trap - EXIT
+}
+
+snapshot() {
+  ensure_dirs
+  source_ros
+  python3 "${XLEROBOT_WS}/scripts/capture_stack_layers.py" \
+    --side "${side}" \
+    --prompt "${prompt}" \
+    --top-k "${DEFAULT_TOP_K}" \
+    --out-dir "${XLEROBOT_RUN}/grasp/${side}/snapshot_$(date -u +%Y%m%dT%H%M%SZ)"
+}
+
+status() {
+  echo "XLEROBOT_WS=${XLEROBOT_WS}"
+  echo "XLEROBOT_RUN=${XLEROBOT_RUN}"
+  for item in left right; do
+    local pid_file="${PID_DIR}/grasp_${item}.pid"
+    if [[ -s "${pid_file}" ]] && kill -0 "$(cat "${pid_file}")" 2>/dev/null; then
+      echo "${item}: running pid $(cat "${pid_file}")"
+    else
+      echo "${item}: stopped"
+    fi
+  done
+}
+
+cmd="${1:-}"
+case "${cmd}" in
+  up) start_stack ;;
+  detect) detect ;;
+  plan) plan ;;
+  execute) execute_grasp ;;
+  snapshot) snapshot ;;
+  verify-board) verify_board ;;
+  status) status ;;
+  down) stop_stack ;;
+  *) usage; exit 2 ;;
+esac

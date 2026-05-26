@@ -321,6 +321,15 @@ STEPS: tuple[Step, ...] = (
         required_config=("left_wrist_dev", "right_wrist_dev", "center_gopro_dev", "left_wrist_info", "right_wrist_info", "center_gopro_info"),
     ),
     Step(
+        id="generate_grasp_runtime_config",
+        title="Generate calibrated grasp runtime configs",
+        description="Create side-specific grasp request, planner, and MoveIt config files for the current run.",
+        kind="action",
+        action="generate_grasp_runtime_config",
+        prerequisites=("generate_camera_config", "vision_handeye_left", "vision_handeye_right", "camera_extrinsics"),
+        required_config=("left_port", "right_port", "left_joint_config", "right_joint_config", "left_wrist_info", "right_wrist_info", "center_gopro_info"),
+    ),
+    Step(
         id="tf_validation",
         title="Validate full TF tree",
         description="Verify world to both bases, wrist cameras, and center GoPro optical frame.",
@@ -332,7 +341,7 @@ STEPS: tuple[Step, ...] = (
         title="Run perception dry run",
         description="Start grasp request nodes and call left/right detect_grasps without motion execution.",
         kind="manual",
-        prerequisites=("tf_validation", "generate_camera_config"),
+        prerequisites=("tf_validation", "generate_camera_config", "generate_grasp_runtime_config"),
     ),
     Step(
         id="export_report",

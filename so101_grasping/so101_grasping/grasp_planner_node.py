@@ -14,18 +14,21 @@ from typing import Any
 import numpy as np
 import rclpy
 from control_msgs.action import ParallelGripperCommand
-from geometry_msgs.msg import Point, PoseStamped
+from geometry_msgs.msg import Point, Pose, PoseStamped
 from moveit.core.robot_state import RobotState
 from moveit.planning import MoveItPy, MultiPipelinePlanRequestParameters
 from moveit_msgs.msg import CollisionObject, DisplayTrajectory
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.time import Time
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
 from shape_msgs.msg import SolidPrimitive
 from tf_transformations import quaternion_from_euler, quaternion_from_matrix, quaternion_matrix
+from tf2_ros import Buffer, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
 from so101_grasp_msgs.msg import GraspCandidate
@@ -79,6 +82,24 @@ def _pose_to_numpy(pose) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return position, quat, matrix[:3, :3]
 
 
+def _pose_matrix(position: np.ndarray, quat_xyzw: np.ndarray) -> np.ndarray:
+    matrix = quaternion_matrix(quat_xyzw)
+    matrix[:3, 3] = position
+    return matrix
+
+
+def _pose_from_matrix(matrix: np.ndarray) -> Pose:
+    pose = Pose()
+    pose.position = _point(np.asarray(matrix[:3, 3], dtype=np.float64))
+    quat = np.asarray(quaternion_from_matrix(matrix), dtype=np.float64)
+    quat /= max(float(np.linalg.norm(quat)), 1e-9)
+    pose.orientation.x = float(quat[0])
+    pose.orientation.y = float(quat[1])
+    pose.orientation.z = float(quat[2])
+    pose.orientation.w = float(quat[3])
+    return pose
+
+
 def _copy_grasp(grasp: GraspCandidate) -> GraspCandidate:
     copied = GraspCandidate()
     copied.header = grasp.header
@@ -96,6 +117,15 @@ class GraspPlannerNode(Node):
         self.declare_parameter("detect_service", "/detect_grasps")
         self.declare_parameter("plan_service", "/plan_grasp")
         self.declare_parameter("allow_execution", False)
+        self.declare_parameter("grasp_frame", BASE_FRAME)
+        self.declare_parameter("arm_base_frame", BASE_FRAME)
+        self.declare_parameter("moveit_frame", MOVEIT_FRAME)
+        self.declare_parameter("ee_frame", EE_FRAME)
+        self.declare_parameter("joint_states_topic", "/follower/joint_states")
+        self.declare_parameter("object_cloud_topic", "/so101_grasping/object_cloud")
+        self.declare_parameter("wrist_object_cloud_topic", "/so101_grasping/wrist_object_cloud")
+        self.declare_parameter("display_topic", "/so101_grasping/display_planned_path")
+        self.declare_parameter("planned_markers_topic", "/so101_grasping/planned_path_markers")
         self.declare_parameter("default_prompt", "pink cube")
         self.declare_parameter("default_top_k", 8)
         self.declare_parameter("pregrasp_offset_m", 0.10)
@@ -147,6 +177,11 @@ class GraspPlannerNode(Node):
         )
 
         self._allow_execution = bool(self.get_parameter("allow_execution").value)
+        self._grasp_frame = str(self.get_parameter("grasp_frame").value)
+        self._arm_base_frame = str(self.get_parameter("arm_base_frame").value)
+        self._moveit_frame = str(self.get_parameter("moveit_frame").value)
+        self._ee_frame = str(self.get_parameter("ee_frame").value)
+        self._joint_states_topic = str(self.get_parameter("joint_states_topic").value)
         self._default_prompt = str(self.get_parameter("default_prompt").value)
         self._default_top_k = int(self.get_parameter("default_top_k").value)
         self._default_pregrasp_offset_m = float(self.get_parameter("pregrasp_offset_m").value)
@@ -227,6 +262,8 @@ class GraspPlannerNode(Node):
         )
 
         cb_group = ReentrantCallbackGroup()
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self, spin_thread=True)
         self._detect_client = self.create_client(
             DetectGrasps,
             str(self.get_parameter("detect_service").value),
@@ -238,12 +275,26 @@ class GraspPlannerNode(Node):
             self._on_plan_grasp,
             callback_group=cb_group,
         )
-        self._display_pub = self.create_publisher(DisplayTrajectory, "/so101_grasping/display_planned_path", 1)
-        self._markers_pub = self.create_publisher(MarkerArray, "/so101_grasping/planned_path_markers", 1)
-        self.create_subscription(PointCloud2, "/so101_grasping/object_cloud", self._on_object_cloud, 1, callback_group=cb_group)
+        self._display_pub = self.create_publisher(
+            DisplayTrajectory,
+            str(self.get_parameter("display_topic").value),
+            1,
+        )
+        self._markers_pub = self.create_publisher(
+            MarkerArray,
+            str(self.get_parameter("planned_markers_topic").value),
+            1,
+        )
         self.create_subscription(
             PointCloud2,
-            "/so101_grasping/wrist_object_cloud",
+            str(self.get_parameter("object_cloud_topic").value),
+            self._on_object_cloud,
+            1,
+            callback_group=cb_group,
+        )
+        self.create_subscription(
+            PointCloud2,
+            str(self.get_parameter("wrist_object_cloud_topic").value),
             self._on_wrist_object_cloud,
             1,
             callback_group=cb_group,
@@ -264,7 +315,7 @@ class GraspPlannerNode(Node):
         self.get_logger().info("Initializing MoveItPy grasp planner")
         self._moveit = MoveItPy(
             node_name="so101_grasp_moveit_py",
-            remappings={"joint_states": "/follower/joint_states"},
+            remappings={"joint_states": self._joint_states_topic},
         )
         joint_model_group = self._moveit.get_robot_model().get_joint_model_group(PLANNING_GROUP)
         self._moveit_joint_names = list(getattr(joint_model_group, "active_joint_model_names", []))
@@ -273,7 +324,8 @@ class GraspPlannerNode(Node):
         self._arm = self._moveit.get_planning_component(PLANNING_GROUP)
         self._plan_params = MultiPipelinePlanRequestParameters(self._moveit, [self._planner_parameter_set])
         self.get_logger().info(
-            f"grasp_planner_node ready: /plan_grasp, allow_execution={self._allow_execution}"
+            f"grasp_planner_node ready: /plan_grasp, arm_base={self._arm_base_frame}, "
+            f"moveit_frame={self._moveit_frame}, allow_execution={self._allow_execution}"
         )
 
     def _float_parameter_list(self, name: str, fallback: list[float]) -> list[float]:
@@ -291,8 +343,15 @@ class GraspPlannerNode(Node):
             [float(point[0]), float(point[1]), float(point[2])]
             for point in point_cloud2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True)
         ]
+        array = np.asarray(points, dtype=np.float64)
+        source_frame = msg.header.frame_id.strip() or self._grasp_frame
+        if len(array):
+            try:
+                array = self._points_to_arm_base(array, source_frame)
+            except Exception as exc:  # noqa: BLE001 - planner can continue with grasp poses.
+                self.get_logger().warning(f"Could not transform object cloud from {source_frame}: {exc}")
         with self._cloud_lock:
-            self._latest_object_cloud = np.asarray(points, dtype=np.float64)
+            self._latest_object_cloud = array
 
     def _on_wrist_object_cloud(self, msg: PointCloud2) -> None:
         count = 0
@@ -336,10 +395,16 @@ class GraspPlannerNode(Node):
             response.success = False
             response.message = "detect_grasps returned no candidates"
             return response
+        try:
+            planning_grasps = [self._grasp_to_arm_base(grasp) for grasp in detect_response.grasps]
+        except Exception as exc:
+            response.success = False
+            response.message = f"failed to transform grasp candidates into {self._arm_base_frame}: {exc}"
+            return response
 
         self._sync_collision_scene()
         selection, failures = self._select_plan_from_grasps(
-            detect_response.grasps,
+            planning_grasps,
             requested_index=int(request.grasp_index),
             pregrasp_offset=pregrasp_offset,
             deadline=plan_deadline,
@@ -355,7 +420,7 @@ class GraspPlannerNode(Node):
             self._fill_plan_response(response, selection)
 
             if bool(request.execute):
-                if not self._allow_execution:
+                if not bool(self.get_parameter("allow_execution").value):
                     response.message += "; execution refused because allow_execution=false"
                 elif self._wrist_refine_before_grasp:
                     executed, execute_message, refined_selection = self._execute_wrist_refined_grasp(
@@ -393,6 +458,45 @@ class GraspPlannerNode(Node):
             self._robot_trajectory_msg_from_plan(stage.result) for stage in selection.planned_stages
         ])
         self._publish_plan_markers(selection.grasp, selection.planned_stages)
+
+    def _frame_transform(self, target_frame: str, source_frame: str) -> np.ndarray:
+        if target_frame == source_frame:
+            return np.eye(4, dtype=np.float64)
+        transform = self._tf_buffer.lookup_transform(
+            target_frame,
+            source_frame,
+            Time(),
+            timeout=Duration(seconds=1.0),
+        )
+        quat = [
+            transform.transform.rotation.x,
+            transform.transform.rotation.y,
+            transform.transform.rotation.z,
+            transform.transform.rotation.w,
+        ]
+        matrix = quaternion_matrix(quat).astype(np.float64)
+        matrix[0, 3] = float(transform.transform.translation.x)
+        matrix[1, 3] = float(transform.transform.translation.y)
+        matrix[2, 3] = float(transform.transform.translation.z)
+        return matrix
+
+    def _points_to_arm_base(self, points: np.ndarray, source_frame: str) -> np.ndarray:
+        transform = self._frame_transform(self._arm_base_frame, source_frame)
+        hom = np.c_[np.asarray(points, dtype=np.float64), np.ones((len(points), 1), dtype=np.float64)]
+        return (transform @ hom.T).T[:, :3]
+
+    def _grasp_to_arm_base(self, grasp: GraspCandidate) -> GraspCandidate:
+        source_frame = grasp.header.frame_id.strip() or self._grasp_frame
+        planned = _copy_grasp(grasp)
+        if source_frame == self._arm_base_frame or source_frame == self._moveit_frame:
+            planned.header.frame_id = self._arm_base_frame
+            return planned
+
+        target_from_source = self._frame_transform(self._arm_base_frame, source_frame)
+        position, quat, _ = _pose_to_numpy(grasp.pose)
+        planned.pose = _pose_from_matrix(target_from_source @ _pose_matrix(position, quat))
+        planned.header.frame_id = self._arm_base_frame
+        return planned
 
     def _select_plan_from_grasps(
         self,
@@ -676,7 +780,7 @@ class GraspPlannerNode(Node):
 
     def _make_pose(self, position: np.ndarray, quat: np.ndarray) -> PoseStamped:
         pose = PoseStamped()
-        pose.header.frame_id = MOVEIT_FRAME
+        pose.header.frame_id = self._moveit_frame
         pose.header.stamp = self.get_clock().now().to_msg()
         pose.pose.position = _point(position)
         pose.pose.orientation.x = float(quat[0])
@@ -705,7 +809,7 @@ class GraspPlannerNode(Node):
             )
         robot_state.update()
         try:
-            transform = np.asarray(robot_state.get_global_link_transform(EE_FRAME), dtype=np.float64)
+            transform = np.asarray(robot_state.get_global_link_transform(self._ee_frame), dtype=np.float64)
         except Exception as exc:  # noqa: BLE001 - fallback planning can continue without it
             self.get_logger().warning(f"Could not read current EE transform for orientation fallback: {exc}")
             return None
@@ -845,12 +949,12 @@ class GraspPlannerNode(Node):
         start_state = self._current_robot_state() if start_state is None else self._copy_robot_state(start_state)
         robot_state = self._copy_robot_state(start_state)
 
-        if not robot_state.set_from_ik(PLANNING_GROUP, pose_stamped.pose, EE_FRAME, self._ik_timeout_s):
+        if not robot_state.set_from_ik(PLANNING_GROUP, pose_stamped.pose, self._ee_frame, self._ik_timeout_s):
             self._use_pose_goal_fallback = bool(self.get_parameter("use_pose_goal_fallback").value)
             if not self._use_pose_goal_fallback:
                 return None, None, f"IK failed; pose-goal fallback disabled; {self._pose_summary(pose_stamped)}"
             self._arm.set_start_state(robot_state=start_state)
-            self._arm.set_goal_state(pose_stamped_msg=pose_stamped, pose_link=EE_FRAME)
+            self._arm.set_goal_state(pose_stamped_msg=pose_stamped, pose_link=self._ee_frame)
             plan_result = self._arm.plan(multi_plan_parameters=self._plan_params)
             if plan_result:
                 return plan_result, self._state_from_plan_end(plan_result, start_state), "MoveIt pose-goal plan found after direct IK failed"
@@ -905,7 +1009,7 @@ class GraspPlannerNode(Node):
         primitive.dimensions = [float(size[0]), float(size[1]), float(size[2])]
 
         collision_object = CollisionObject()
-        collision_object.header.frame_id = MOVEIT_FRAME
+        collision_object.header.frame_id = self._moveit_frame
         collision_object.id = object_id
         collision_object.primitives = [primitive]
         pose = PoseStamped()
@@ -1267,7 +1371,7 @@ class GraspPlannerNode(Node):
             pose_stage_pairs.append((stage, point))
 
         line = Marker()
-        line.header.frame_id = BASE_FRAME
+        line.header.frame_id = self._arm_base_frame
         line.header.stamp = self.get_clock().now().to_msg()
         line.ns = "moveit_grasp_plan"
         line.id = 0

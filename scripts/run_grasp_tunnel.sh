@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REMOTE_HOST="${REMOTE_HOST:-dell}"
+REMOTE_HOST="${REMOTE_HOST:-dell@192.168.1.73}"
 LOCAL_PORT="${LOCAL_PORT:-8091}"
 REMOTE_PORT="${REMOTE_PORT:-8091}"
 
