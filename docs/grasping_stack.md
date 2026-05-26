@@ -49,9 +49,19 @@ right arm only. This avoids two arms competing for an ambiguous target when
 there are multiple similar objects, such as two pink cubes. `execute` first
 verifies the fixed ChArUco board from the center GoPro against the accepted
 calibration, then requires typing `EXECUTE` before it enables planner execution
-for that one service call. This board check catches camera/world drift; the
-wrist-refine stage re-detects the object before descent to catch local
-object/arm error.
+for that one service call. This board check catches camera/world drift.
+
+Wrist refinement is currently opt-in because the SO-101 wrist camera look pose
+can move the arm into awkward configurations before the refreshed detection is
+validated:
+
+```bash
+WRIST_REFINE_BEFORE_GRASP=true ./scripts/xlerobot_grasp_stack.sh execute right "pink cube"
+```
+
+The runtime also skips the MoveIt named `zero` pose by default. Plans start
+from the live joint state and go directly toward the over-object/pregrasp
+sequence, avoiding a large detour through an arbitrary canonical pose.
 
 Wrist refinement must remain tied to the original overhead target. Refreshed
 wrist detections are transformed into the active arm base frame, then rejected

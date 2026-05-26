@@ -653,9 +653,16 @@ class GraspPlannerNode(Node):
         return PrimitiveStage("wrist_camera_look", pose=self._make_pose(ee_position, quat))
 
     def _wrist_refine_view_stages(self, selection: PlanSelection) -> list[PrimitiveStage]:
-        stages = [PrimitiveStage("ready_up", configuration_name=self._ready_configuration_name)]
+        stages = self._initial_ready_stages()
         stages.append(self._make_wrist_camera_look_stage(selection.grasp))
         return stages
+
+    def _initial_ready_stages(self) -> list[PrimitiveStage]:
+        name = str(self.get_parameter("ready_configuration_name").value).strip()
+        if name.lower() in {"", "none", "off", "false", "skip"}:
+            return []
+        self._ready_configuration_name = name
+        return [PrimitiveStage("ready_up", configuration_name=name)]
 
     def _filter_wrist_refine_candidates(
         self,
@@ -790,7 +797,7 @@ class GraspPlannerNode(Node):
                 pregrasp[2] = max(float(target[2] + pregrasp_clearance), self._min_pregrasp_z_m)
                 close[2] = max(float(target[2] + self._close_clearance_m), self._min_close_z_m)
                 stages = [
-                    PrimitiveStage("ready_up", configuration_name=self._ready_configuration_name),
+                    *self._initial_ready_stages(),
                     PrimitiveStage("pregrasp_align", pose=self._make_pose(pregrasp, quat)),
                     PrimitiveStage("descent_close", pose=self._make_pose(close, quat)),
                 ]
@@ -818,7 +825,7 @@ class GraspPlannerNode(Node):
                 pregrasp[2] = max(float(target[2] + pregrasp_clearance), self._min_pregrasp_z_m)
                 close[2] = max(float(target[2] + self._close_clearance_m), self._min_close_z_m)
                 stages = [
-                    PrimitiveStage("ready_up", configuration_name=self._ready_configuration_name),
+                    *self._initial_ready_stages(),
                     PrimitiveStage("ggcnn_ready_over_object", pose=self._make_pose(ready, quat)),
                     PrimitiveStage("ggcnn_pregrasp_align", pose=self._make_pose(pregrasp, quat)),
                     PrimitiveStage("ggcnn_descent_close", pose=self._make_pose(close, quat)),

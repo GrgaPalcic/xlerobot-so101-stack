@@ -15,6 +15,7 @@ DETECT_CALL_TIMEOUT_S="${DETECT_CALL_TIMEOUT_S:-180}"
 PLAN_CALL_TIMEOUT_S="${PLAN_CALL_TIMEOUT_S:-180}"
 EXECUTE_CALL_TIMEOUT_S="${EXECUTE_CALL_TIMEOUT_S:-300}"
 VERIFY_BOARD_BEFORE_EXECUTE="${VERIFY_BOARD_BEFORE_EXECUTE:-true}"
+WRIST_REFINE_BEFORE_GRASP="${WRIST_REFINE_BEFORE_GRASP:-false}"
 BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX="${BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX:-8.0}"
 BOARD_VERIFY_MIN_MARKERS="${BOARD_VERIFY_MIN_MARKERS:-8}"
 BOARD_VERIFY_MIN_INLIER_POINTS="${BOARD_VERIFY_MIN_INLIER_POINTS:-24}"
@@ -344,6 +345,8 @@ execute_grasp() {
   source_ros
   wait_for_service "/${side}_grasp/plan_grasp"
   wait_for_runtime_tf 20
+  ros2 param set "/${side}_grasp/grasp_planner_node" wrist_refine_before_grasp "${WRIST_REFINE_BEFORE_GRASP}" >/dev/null
+  echo "wrist_refine_before_grasp=${WRIST_REFINE_BEFORE_GRASP}"
   ros2 param set "/${side}_grasp/grasp_planner_node" allow_execution true >/dev/null
   trap 'ros2 param set "/'"${side}"'_grasp/grasp_planner_node" allow_execution false >/dev/null 2>&1 || true' EXIT
   call_ros_service "${EXECUTE_CALL_TIMEOUT_S}" "${LOG_DIR}/${side}_execute_grasp.txt" \
