@@ -267,57 +267,36 @@ STEPS: tuple[Step, ...] = (
         action="generate_world_files",
     ),
     Step(
-        id="touch_left_base",
-        title="Touch fixed target with left arm",
-        description="Run record_board_touch_points.py for left/base_link.",
-        kind="manual",
-        prerequisites=("state_only_left", "generate_world_files"),
-        dangerous=True,
-        commands=(
-            "python3 {workspace}/scripts/record_board_touch_points.py "
-            "--base-frame left/base_link --tool-frame left/gripper_frame_link --tool-offset '0 0 0' "
-            "--cols {world_cols} --rows {world_rows} --square-m {world_square_m} --marker-m {world_marker_m} "
-            "--start-id {world_start_id} --dictionary {world_dict} --corner-layout tl_tr_bl_br "
-            "--samples 11 --output {out}/touch/left_base_to_world_board.yaml",
+        id="vision_handeye_left",
+        title="Solve left wrist hand-eye from vision",
+        description=(
+            "Launch the left arm, wrist camera preview, and browser jog UI. Capture varied board views, "
+            "then solve world->left/base_link and left/gripper_frame_link->left/wrist_camera_optical_frame."
         ),
-    ),
-    Step(
-        id="touch_right_base",
-        title="Touch fixed target with right arm",
-        description="Run record_board_touch_points.py for right/base_link.",
-        kind="manual",
-        prerequisites=("state_only_right", "generate_world_files"),
-        dangerous=True,
-        commands=(
-            "python3 {workspace}/scripts/record_board_touch_points.py "
-            "--base-frame right/base_link --tool-frame right/gripper_frame_link --tool-offset '0 0 0' "
-            "--cols {world_cols} --rows {world_rows} --square-m {world_square_m} --marker-m {world_marker_m} "
-            "--start-id {world_start_id} --dictionary {world_dict} --corner-layout tl_tr_bl_br "
-            "--samples 11 --output {out}/touch/right_base_to_world_board.yaml",
-        ),
-    ),
-    Step(
-        id="invert_touch_solves",
-        title="Invert touch solves into world-to-base TFs",
-        description="Generate world_to_left_base.yaml, world_to_right_base.yaml, and static TF commands.",
         kind="action",
-        action="invert_touch_solves",
-        prerequisites=("touch_left_base", "touch_right_base"),
+        action="vision_handeye_left",
+        prerequisites=("generate_controller_configs", "generate_joint_configs", "generate_world_files", "intrinsics_left"),
+        required_config=("left_port", "left_joint_config", "left_wrist_dev", "left_wrist_info"),
+    ),
+    Step(
+        id="vision_handeye_right",
+        title="Solve right wrist hand-eye from vision",
+        description=(
+            "Launch the right arm, wrist camera preview, and browser jog UI. Capture varied board views, "
+            "then solve world->right/base_link and right/gripper_frame_link->right/wrist_camera_optical_frame."
+        ),
+        kind="action",
+        action="vision_handeye_right",
+        prerequisites=("generate_controller_configs", "generate_joint_configs", "generate_world_files", "intrinsics_right"),
+        required_config=("right_port", "right_joint_config", "right_wrist_dev", "right_wrist_info"),
     ),
     Step(
         id="camera_extrinsics",
-        title="Solve center and wrist camera extrinsics",
-        description="Run solve_camera_extrinsics_from_board.py for center GoPro and wrist mount poses.",
+        title="Solve center GoPro extrinsic",
+        description="Run solve_camera_extrinsics_from_board.py for the fixed center GoPro in world.",
         kind="manual",
-        prerequisites=("invert_touch_solves",),
-        required_config=(
-            "left_wrist_dev",
-            "right_wrist_dev",
-            "center_gopro_dev",
-            "left_wrist_info",
-            "right_wrist_info",
-            "center_gopro_info",
-        ),
+        prerequisites=("vision_handeye_left", "vision_handeye_right"),
+        required_config=("center_gopro_dev", "center_gopro_info"),
         commands=(
             "ffmpeg -y -f v4l2 -input_format yuyv422 -video_size 1280x720 "
             "-i {center_gopro_dev} -frames:v 1 {out}/images/center_gopro_world_board.jpg\n"
@@ -328,37 +307,6 @@ STEPS: tuple[Step, ...] = (
             "--output {out}/extrinsics/center_gopro_in_world.yaml "
             "--overlay-output {out}/images/center_gopro_world_board_overlay.jpg "
             "--frame-output {out}/images/center_gopro_world_board_frame.jpg --parent-frame world "
-            "--cols {world_cols} --rows {world_rows} --square-m {world_square_m} --marker-m {world_marker_m} "
-            "--start-id {world_start_id} --marker-count {world_marker_count} --aruco-dict {world_dict} "
-            "--min-markers 8\n"
-            "\n"
-            "# Repeat the wrist command template for at least five distinct poses per wrist.\n"
-            "ffmpeg -y -f v4l2 -input_format mjpeg -video_size 1280x800 "
-            "-i {left_wrist_dev} -frames:v 1 {out}/images/left_wrist_world_board_pose01.jpg\n"
-            "\n"
-            "python3 {workspace}/scripts/solve_camera_extrinsics_from_board.py "
-            "--image {out}/images/left_wrist_world_board_pose01.jpg "
-            "--camera-name left/wrist_camera_optical_frame --camera-info {left_wrist_info} "
-            "--board-in-base {out}/extrinsics/world_board_identity.yaml "
-            "--output {out}/extrinsics/left_wrist_pose01.yaml "
-            "--overlay-output {out}/images/left_wrist_world_board_pose01_overlay.jpg "
-            "--frame-output {out}/images/left_wrist_world_board_pose01_frame.jpg "
-            "--parent-frame world --mount-parent-frame world --mount-child-frame left/gripper_frame_link "
-            "--cols {world_cols} --rows {world_rows} --square-m {world_square_m} --marker-m {world_marker_m} "
-            "--start-id {world_start_id} --marker-count {world_marker_count} --aruco-dict {world_dict} "
-            "--min-markers 8\n"
-            "\n"
-            "ffmpeg -y -f v4l2 -input_format mjpeg -video_size 1280x800 "
-            "-i {right_wrist_dev} -frames:v 1 {out}/images/right_wrist_world_board_pose01.jpg\n"
-            "\n"
-            "python3 {workspace}/scripts/solve_camera_extrinsics_from_board.py "
-            "--image {out}/images/right_wrist_world_board_pose01.jpg "
-            "--camera-name right/wrist_camera_optical_frame --camera-info {right_wrist_info} "
-            "--board-in-base {out}/extrinsics/world_board_identity.yaml "
-            "--output {out}/extrinsics/right_wrist_pose01.yaml "
-            "--overlay-output {out}/images/right_wrist_world_board_pose01_overlay.jpg "
-            "--frame-output {out}/images/right_wrist_world_board_pose01_frame.jpg "
-            "--parent-frame world --mount-parent-frame world --mount-child-frame right/gripper_frame_link "
             "--cols {world_cols} --rows {world_rows} --square-m {world_square_m} --marker-m {world_marker_m} "
             "--start-id {world_start_id} --marker-count {world_marker_count} --aruco-dict {world_dict} "
             "--min-markers 8",
@@ -377,7 +325,7 @@ STEPS: tuple[Step, ...] = (
         title="Validate full TF tree",
         description="Verify world to both bases, wrist cameras, and center GoPro optical frame.",
         kind="manual",
-        prerequisites=("invert_touch_solves", "camera_extrinsics"),
+        prerequisites=("vision_handeye_left", "vision_handeye_right", "camera_extrinsics"),
     ),
     Step(
         id="perception_dry_run",

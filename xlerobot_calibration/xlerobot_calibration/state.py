@@ -68,6 +68,7 @@ def ensure_run_dirs(out_dir: Path) -> None:
         "images",
         "intrinsics",
         "extrinsics",
+        "handeye",
         "touch",
         "audit",
         "snapshots",

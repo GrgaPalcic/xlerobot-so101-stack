@@ -615,7 +615,74 @@ YAML from the preset-backed run state:
 calib run-step generate_world_files
 ```
 
-## Solve Each Arm Base From Touches
+## Solve Wrist Hand-Eye From Vision
+
+The normal path no longer uses physical corner touches. Keep the fixed 7x5
+workspace plate locked down. For each wrist, the camera observes that plate at
+many varied arm poses while the recorder saves the matching base/gripper TF.
+The solver uses OpenCV robot-world/hand-eye calibration to write both:
+
+```text
+world -> left/base_link
+left/gripper_frame_link -> left/wrist_camera_optical_frame
+world -> right/base_link
+right/gripper_frame_link -> right/wrist_camera_optical_frame
+```
+
+Run one side at a time from the Dell workspace:
+
+```bash
+calib run-step vision_handeye_left
+calib run-step vision_handeye_right
+```
+
+Or use the direct wrappers:
+
+```bash
+cd /home/dell/Documents/xlerobot-so101-stack
+./scripts/xlerobot_vision_handeye.sh left
+./scripts/xlerobot_vision_handeye.sh right
+```
+
+The wrapper starts the command-enabled split launch, Cartesian motion service,
+wrist camera preview, and browser controls. Open the URL printed by the
+recorder, usually `http://192.168.1.73:8780/` for left and
+`http://192.168.1.73:8781/` for right. Use Cartesian or joint buttons to move
+the wrist through visible-board poses, press Sample at each good view, then
+Quit after at least 30 samples if possible.
+
+Collect pose diversity instead of exact target placement:
+
+```text
+centered board, medium range
+closer and farther range
+board left/right/up/down in the image
+wrist rolled both directions
+wrist flexed/tilted so the board normal changes
+```
+
+Accept only if overlays show the axes attached to the fixed plate and the
+summary residuals are plausible. Default filtering keeps samples with at least
+8 markers and mean reprojection error <= 2.5 px. Outputs land in:
+
+```text
+$OUT/handeye/<side>/samples.jsonl
+$OUT/handeye/<side>/frames/*.jpg
+$OUT/handeye/<side>/overlays/*.jpg
+$OUT/extrinsics/world_to_<side>_base.yaml
+$OUT/extrinsics/<side>_wrist_camera_in_gripper.yaml
+$OUT/extrinsics/vision_handeye_summary.json
+$OUT/logs/static_tf_world_bases.sh
+$OUT/logs/static_tf_wrist_cameras.sh
+```
+
+For smoother motion, pass the same Feetech profile overrides used by touch-jog:
+
+```bash
+./scripts/xlerobot_vision_handeye.sh left --command-speed 1200 --command-acceleration 25
+```
+
+## Advanced Fallback: Solve Each Arm Base From Touches
 
 Keep the fixed workspace target physically locked down. Do not move it between
 left and right arm touch solves.
@@ -731,7 +798,7 @@ raw x/y angle differs from 90 deg by more than 2 deg
 fourth-corner check error is more than 5 mm, if using all four corners
 ```
 
-## Invert Touch Solves And Publish `world -> base_link`
+## Advanced Fallback: Invert Touch Solves And Publish `world -> base_link`
 
 Generate static TF commands from the touch YAMLs:
 
@@ -838,9 +905,8 @@ the same board preset already recorded in `run_state.yaml`.
 calib run-step camera_extrinsics
 ```
 
-This manual step prints the center GoPro solve and wrist-pose templates with
-the current board preset, camera device paths, and camera-info YAML paths
-expanded from `run_state.yaml`.
+This manual step prints the center GoPro solve with the current board preset,
+camera device path, and camera-info YAML path expanded from `run_state.yaml`.
 
 Accept only if:
 
@@ -857,9 +923,11 @@ The script prints a static TF command. Keep it running:
 # Use the exact command printed by solve_camera_extrinsics_from_board.py.
 ```
 
-## Wrist Camera Extrinsics
+## Advanced Fallback: Single-Pose Wrist Camera Extrinsics
 
-The wrist camera solve must output the mount transform:
+The normal wrist camera extrinsic path is the vision hand-eye workflow above.
+Use this single-pose section only for debugging older data. The wrist camera
+solve must output the mount transform:
 
 ```text
 left/gripper_frame_link -> left/wrist_camera_optical_frame

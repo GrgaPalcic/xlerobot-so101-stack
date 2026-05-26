@@ -97,10 +97,12 @@ complete
 failed
 ```
 
-Steps that can write motor EEPROM or involve real hardware are marked dangerous
-and ask for confirmation unless `--yes` is passed. Long-running ROS launches
-and hand-guided touch/camera captures are manual steps: the CLI prints the
-exact command/instructions and asks whether to mark the step complete.
+Steps that can write motor EEPROM or involve real hardware ask for confirmation
+unless `--yes` is passed. Long-running ROS launches and hand-guided camera
+captures either print exact manual instructions or run through a wrapper that
+shows every command before starting. The normal wrist extrinsic path is
+`vision_handeye_left/right`, which opens a browser preview/jog UI and writes the
+hand-eye outputs automatically after the recorder quits.
 
 `lerobot_find_ports` is also manual. The upstream `lerobot-find-port` helper is
 interactive and asks the operator to unplug a motor bus. Running it as a

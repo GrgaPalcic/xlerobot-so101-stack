@@ -14,7 +14,16 @@ calibrate_so101_grippers_only.py
 
 record_board_touch_points.py
   Uses TF to record board corner touches in follower/base_link.
-  Current accepted layout: top_left, bottom_left, bottom_right.
+  Advanced fallback/debug path. Current accepted layout from the legacy
+  one-arm workflow was top_left, bottom_left, bottom_right.
+
+capture_wrist_handeye_dataset.py
+  Live wrist camera preview plus browser/terminal jog UI. Captures fixed
+  workspace board PnP and base/gripper TF samples for each wrist camera.
+
+solve_wrist_robot_world_handeye.py
+  Uses cv2.calibrateRobotWorldHandEye to solve world->base_link and
+  gripper_frame_link->wrist_camera_optical_frame from captured samples.
 
 solve_camera_extrinsics_from_board.py
   Detects caib.io board in camera image.

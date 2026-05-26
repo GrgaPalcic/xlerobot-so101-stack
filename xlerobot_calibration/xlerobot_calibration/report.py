@@ -56,7 +56,7 @@ def write_report(state: dict[str, Any]) -> Path:
             "",
             "- [ ] Left/right LeRobot calibration JSONs are fresh and archived.",
             "- [ ] ROS joint state audit agrees with physical joint identity.",
-            "- [ ] World/base touch solve quality is acceptable for both arms.",
+            "- [ ] Vision hand-eye residuals are acceptable for both wrist cameras.",
             "- [ ] Camera intrinsics and extrinsics pass reprojection checks.",
             "- [ ] TF tree is complete in fixed frame `world`.",
             "- [ ] Perception dry run produces object clouds and grasp markers in `world`.",
@@ -66,4 +66,3 @@ def write_report(state: dict[str, Any]) -> Path:
     )
     report_path.write_text("\n".join(lines), encoding="utf-8")
     return report_path
-

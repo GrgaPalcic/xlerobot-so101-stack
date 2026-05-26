@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 
 from .board_presets import BOARD_PRESETS, apply_board_preset, preset_names
-from .runner import StepError, doctor, run_step, run_touch_jog
+from .runner import StepError, doctor, run_step, run_touch_jog, run_vision_handeye
 from .state import (
     apply_config_overrides,
     create_state,
@@ -67,6 +67,34 @@ def build_parser() -> argparse.ArgumentParser:
     touch_jog.add_argument("--dry-run", action="store_true")
     touch_jog.add_argument("--yes", action="store_true", help="Assume yes for hardware prompt")
     touch_jog.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="Override run config")
+
+    vision_handeye = sub.add_parser("vision-handeye", help="Run one-arm wrist camera vision hand-eye calibration")
+    add_common_options(vision_handeye)
+    vision_handeye.add_argument("side", choices=("left", "right"))
+    vision_handeye.add_argument("--target-samples", type=int, default=30)
+    vision_handeye.add_argument("--min-samples", type=int, default=15)
+    vision_handeye.add_argument("--min-markers", type=int, default=8)
+    vision_handeye.add_argument("--max-reproj-px", type=float, default=2.5)
+    vision_handeye.add_argument("--jog-step-m", type=float, default=0.005)
+    vision_handeye.add_argument("--max-jog-step-m", type=float, default=0.10)
+    vision_handeye.add_argument("--jog-duration-sec", type=float, default=1.5)
+    vision_handeye.add_argument("--jog-strategy", choices=("cartesian", "joint_quintic"), default="cartesian")
+    vision_handeye.add_argument("--joint-step-rad", type=float, default=0.05235987755982989)
+    vision_handeye.add_argument("--command-speed", type=int, default=None, help="Optional Feetech goal speed for hand-eye jog")
+    vision_handeye.add_argument(
+        "--command-acceleration",
+        type=int,
+        default=None,
+        help="Optional Feetech goal acceleration for hand-eye jog, 0..255",
+    )
+    vision_handeye.add_argument("--arm-max-torque-limit", type=int, default=None)
+    vision_handeye.add_argument("--arm-protection-current", type=int, default=None)
+    vision_handeye.add_argument("--arm-overload-torque", type=int, default=None)
+    vision_handeye.add_argument("--web-port", type=int, default=None, help="Browser UI port. Defaults to 8780 left, 8781 right. Use 0 to disable.")
+    vision_handeye.add_argument("--no-stop-existing", action="store_true", help="Do not stop existing same-side ROS control processes")
+    vision_handeye.add_argument("--dry-run", action="store_true")
+    vision_handeye.add_argument("--yes", action="store_true", help="Assume yes for hardware prompt")
+    vision_handeye.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="Override run config")
 
     status = sub.add_parser("status", help="Show current run status")
     add_common_options(status)
@@ -148,6 +176,32 @@ def main(argv: list[str] | None = None) -> int:
                 tool_offset=args.tool_offset,
                 corner_layout=args.corner_layout,
                 samples=args.samples,
+                jog_step_m=args.jog_step_m,
+                max_jog_step_m=args.max_jog_step_m,
+                jog_duration_sec=args.jog_duration_sec,
+                jog_strategy=args.jog_strategy,
+                joint_step_rad=args.joint_step_rad,
+                command_speed=args.command_speed,
+                command_acceleration=args.command_acceleration,
+                arm_max_torque_limit=args.arm_max_torque_limit,
+                arm_protection_current=args.arm_protection_current,
+                arm_overload_torque=args.arm_overload_torque,
+                web_port=args.web_port,
+                stop_existing=not args.no_stop_existing,
+                dry_run=args.dry_run,
+                yes=args.yes,
+            )
+            save_state(state)
+            return 0
+        if args.command == "vision-handeye":
+            apply_config_overrides(state, args.set)
+            run_vision_handeye(
+                state,
+                args.side,
+                target_samples=args.target_samples,
+                min_samples=args.min_samples,
+                min_markers=args.min_markers,
+                max_reproj_px=args.max_reproj_px,
                 jog_step_m=args.jog_step_m,
                 max_jog_step_m=args.max_jog_step_m,
                 jog_duration_sec=args.jog_duration_sec,

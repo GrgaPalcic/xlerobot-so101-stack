@@ -71,7 +71,7 @@ def run_step(state: dict[str, Any], step_id: str, *, dry_run: bool = False, yes:
     if step.kind == "manual":
         run_manual_step(state, step, dry_run=dry_run, yes=yes)
     elif step.kind == "action":
-        run_action_step(state, step, dry_run=dry_run)
+        run_action_step(state, step, dry_run=dry_run, yes=yes)
     else:
         run_command_step(state, step, dry_run=dry_run)
     save_state(state)
@@ -263,6 +263,188 @@ def build_touch_jog_commands(
     return bringup_cmd, motion_cmd, recorder_cmd
 
 
+def build_vision_handeye_commands(
+    state: dict[str, Any],
+    side: str,
+    *,
+    target_samples: int = 30,
+    min_samples: int = 15,
+    min_markers: int = 8,
+    max_reproj_px: float = 2.5,
+    jog_step_m: float = 0.005,
+    max_jog_step_m: float = 0.10,
+    jog_duration_sec: float = 1.5,
+    jog_strategy: str = "cartesian",
+    joint_step_rad: float = 0.05235987755982989,
+    command_speed: int | None = None,
+    command_acceleration: int | None = None,
+    arm_max_torque_limit: int | None = None,
+    arm_protection_current: int | None = None,
+    arm_overload_torque: int | None = None,
+    web_port: int | None = None,
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    if side not in {"left", "right"}:
+        raise StepError(f"side must be left or right, got {side!r}")
+
+    cfg = state.get("config", {})
+    missing = [
+        key
+        for key in (
+            f"{side}_port",
+            f"{side}_joint_config",
+            f"{side}_wrist_dev",
+            f"{side}_wrist_info",
+            "world_cols",
+            "world_rows",
+            "world_square_m",
+            "world_marker_m",
+            "world_start_id",
+            "world_marker_count",
+            "world_dict",
+        )
+        if is_missing_config_value(cfg.get(key))
+    ]
+    if missing:
+        raise StepError(f"missing config for vision-handeye {side}: {', '.join(missing)}")
+
+    workspace = str(Path(state["workspace"]))
+    out = Path(state["out_dir"])
+    controller_config = out / "config" / f"{side}_split_controllers.yaml"
+    handeye_dir = out / "handeye" / side
+    effective_command_speed = 2400 if command_speed is None else command_speed
+    effective_command_acceleration = 50 if command_acceleration is None else command_acceleration
+    effective_web_port = (8780 if side == "left" else 8781) if web_port is None else web_port
+    joint_config = prepare_touch_jog_joint_config(
+        state,
+        side,
+        command_speed=command_speed,
+        command_acceleration=command_acceleration,
+        arm_max_torque_limit=arm_max_torque_limit,
+        arm_protection_current=arm_protection_current,
+        arm_overload_torque=arm_overload_torque,
+        profile_name="vision_handeye",
+    )
+
+    bringup_cmd = [
+        "ros2",
+        "launch",
+        "so101_bringup",
+        "follower_split.launch.py",
+        f"namespace:={side}",
+        f"frame_prefix:={side}/",
+        "hardware_type:=real",
+        f"usb_port:={cfg[f'{side}_port']}",
+        f"joint_config_file:={joint_config}",
+        f"controller_config_file:={controller_config}",
+        "arm_controller:=arm_forward_controller",
+        "use_rviz:=false",
+    ]
+    motion_cmd = [
+        "ros2",
+        "launch",
+        "so101_kinematics",
+        "cartesian_motion_split.launch.py",
+        f"arm:={side}",
+    ]
+    capture_cmd = [
+        "python3",
+        f"{workspace}/scripts/capture_wrist_handeye_dataset.py",
+        "--device",
+        str(cfg[f"{side}_wrist_dev"]),
+        "--width",
+        "1280",
+        "--height",
+        "800",
+        "--fps",
+        "30",
+        "--fourcc",
+        "MJPG",
+        "--camera-name",
+        f"{side}_wrist_arducam",
+        "--camera-info",
+        str(cfg[f"{side}_wrist_info"]),
+        "--output-dir",
+        str(handeye_dir),
+        "--world-frame",
+        "world",
+        "--base-frame",
+        f"{side}/base_link",
+        "--gripper-frame",
+        f"{side}/gripper_frame_link",
+        "--camera-frame",
+        f"{side}/wrist_camera_optical_frame",
+        "--cols",
+        str(cfg["world_cols"]),
+        "--rows",
+        str(cfg["world_rows"]),
+        "--square-m",
+        str(cfg["world_square_m"]),
+        "--marker-m",
+        str(cfg["world_marker_m"]),
+        "--start-id",
+        str(cfg["world_start_id"]),
+        "--marker-count",
+        str(cfg["world_marker_count"]),
+        "--aruco-dict",
+        str(cfg["world_dict"]),
+        "--min-markers",
+        str(min_markers),
+        "--max-sample-reproj-px",
+        str(max_reproj_px),
+        "--target-samples",
+        str(target_samples),
+        "--jog-service",
+        f"/{side}/go_to_pose",
+        "--jog-step-m",
+        str(jog_step_m),
+        "--max-jog-step-m",
+        str(max_jog_step_m),
+        "--jog-duration-sec",
+        str(jog_duration_sec),
+        "--jog-strategy",
+        jog_strategy,
+        "--joint-jog-topic",
+        f"/{side}/arm_forward_controller/commands",
+        "--joint-states-topic",
+        f"/{side}/joint_states",
+        "--joint-step-rad",
+        str(joint_step_rad),
+        "--command-speed",
+        str(effective_command_speed),
+        "--command-acceleration",
+        str(effective_command_acceleration),
+        "--profile-command",
+        f"./scripts/xlerobot_vision_handeye.sh {side}",
+    ]
+    if effective_web_port > 0:
+        capture_cmd.extend(["--web-port", str(effective_web_port)])
+    solve_cmd = [
+        "python3",
+        f"{workspace}/scripts/solve_wrist_robot_world_handeye.py",
+        "--samples",
+        str(handeye_dir / "samples.jsonl"),
+        "--output-dir",
+        str(out / "extrinsics"),
+        "--side",
+        side,
+        "--min-samples",
+        str(min_samples),
+        "--min-markers",
+        str(min_markers),
+        "--max-reproj-px",
+        str(max_reproj_px),
+        "--world-frame",
+        "world",
+        "--base-frame",
+        f"{side}/base_link",
+        "--gripper-frame",
+        f"{side}/gripper_frame_link",
+        "--camera-frame",
+        f"{side}/wrist_camera_optical_frame",
+    ]
+    return bringup_cmd, motion_cmd, capture_cmd, solve_cmd
+
+
 def prepare_touch_jog_joint_config(
     state: dict[str, Any],
     side: str,
@@ -272,6 +454,7 @@ def prepare_touch_jog_joint_config(
     arm_max_torque_limit: int | None = None,
     arm_protection_current: int | None = None,
     arm_overload_torque: int | None = None,
+    profile_name: str = "touch_jog",
 ) -> str:
     validate_optional_range("command_speed", command_speed, 0, 32767)
     validate_optional_range("command_acceleration", command_acceleration, 0, 255)
@@ -302,7 +485,7 @@ def prepare_touch_jog_joint_config(
             if value is not None:
                 row[key] = int(value)
 
-    target = Path(state["out_dir"]) / "config" / f"{side}_touch_jog_joints.yaml"
+    target = Path(state["out_dir"]) / "config" / f"{side}_{profile_name}_joints.yaml"
     target.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     return str(target)
 
@@ -455,6 +638,195 @@ def run_touch_jog(
         artifact = out / "touch" / f"{side}_base_to_world_board.yaml"
         mark_step(state, f"touch_{side}_base", status="complete", artifacts=[str(artifact)])
         print(f"Saved: {artifact}")
+    finally:
+        for proc in reversed(processes):
+            _terminate_process_group(proc)
+            log_file = getattr(proc, "_xlerobot_log_file", None)
+            if log_file is not None:
+                log_file.close()
+
+
+def run_vision_handeye(
+    state: dict[str, Any],
+    side: str,
+    *,
+    target_samples: int = 30,
+    min_samples: int = 15,
+    min_markers: int = 8,
+    max_reproj_px: float = 2.5,
+    jog_step_m: float = 0.005,
+    max_jog_step_m: float = 0.10,
+    jog_duration_sec: float = 1.5,
+    jog_strategy: str = "cartesian",
+    joint_step_rad: float = 0.05235987755982989,
+    command_speed: int | None = None,
+    command_acceleration: int | None = None,
+    arm_max_torque_limit: int | None = None,
+    arm_protection_current: int | None = None,
+    arm_overload_torque: int | None = None,
+    web_port: int | None = None,
+    stop_existing: bool = True,
+    dry_run: bool = False,
+    yes: bool = False,
+) -> None:
+    if step_status(state, "generate_world_files") != "complete":
+        raise StepError("missing prerequisite for vision-handeye: generate_world_files")
+    if step_status(state, "generate_controller_configs") != "complete":
+        raise StepError("missing prerequisite for vision-handeye: generate_controller_configs")
+    if step_status(state, "generate_joint_configs") != "complete":
+        raise StepError("missing prerequisite for vision-handeye: generate_joint_configs")
+    validate_optional_range("command_speed", command_speed, 0, 32767)
+    validate_optional_range("command_acceleration", command_acceleration, 0, 255)
+    validate_optional_range("arm_max_torque_limit", arm_max_torque_limit, 0, 4095)
+    validate_optional_range("arm_protection_current", arm_protection_current, 0, 4095)
+    validate_optional_range("arm_overload_torque", arm_overload_torque, 0, 255)
+
+    bringup_cmd, motion_cmd, capture_cmd, solve_cmd = build_vision_handeye_commands(
+        state,
+        side,
+        target_samples=target_samples,
+        min_samples=min_samples,
+        min_markers=min_markers,
+        max_reproj_px=max_reproj_px,
+        jog_step_m=jog_step_m,
+        max_jog_step_m=max_jog_step_m,
+        jog_duration_sec=jog_duration_sec,
+        jog_strategy=jog_strategy,
+        joint_step_rad=joint_step_rad,
+        command_speed=command_speed,
+        command_acceleration=command_acceleration,
+        arm_max_torque_limit=arm_max_torque_limit,
+        arm_protection_current=arm_protection_current,
+        arm_overload_torque=arm_overload_torque,
+        web_port=web_port,
+    )
+
+    print("")
+    print(f"# Vision hand-eye: {side}")
+    print("This starts a real command controller, wrist camera preview, and sample recorder.")
+    print("Any existing same-side state-only/jog launch will be stopped first.")
+    tuning_values = {
+        "command_speed": command_speed,
+        "command_acceleration": command_acceleration,
+        "arm_max_torque_limit": arm_max_torque_limit,
+        "arm_protection_current": arm_protection_current,
+        "arm_overload_torque": arm_overload_torque,
+    }
+    enabled_tuning = {key: value for key, value in tuning_values.items() if value is not None}
+    if enabled_tuning:
+        print("Vision hand-eye motor tuning overrides:")
+        for key, value in enabled_tuning.items():
+            print(f"  {key}: {value}")
+        if any(key.startswith("arm_") for key in enabled_tuning):
+            print("  Note: arm torque/current overrides are written to servo registers at launch.")
+    print("")
+    print("Commands that will run:")
+    print(shell_join(bringup_cmd))
+    print(shell_join(motion_cmd))
+    print(shell_join(capture_cmd))
+    print(shell_join(solve_cmd))
+    existing = find_side_control_processes(side)
+    if existing:
+        print("")
+        print(f"Existing {side} ROS control processes detected:")
+        for proc in existing:
+            print(f"  pid={proc['pid']} {proc['cmd']}")
+        if not stop_existing:
+            raise StepError(f"existing {side} ROS control processes are running")
+    print("")
+
+    step_id = f"vision_handeye_{side}"
+    if dry_run:
+        mark_step(state, step_id, status="dry_run")
+        return
+    if not confirm("Workspace is clear and this arm is safe to command?", yes):
+        raise StepError("operator declined vision-handeye")
+
+    workspace = Path(state["workspace"])
+    out = Path(state["out_dir"])
+    logs = out / "logs"
+    bringup_log = logs / f"{side}_vision_handeye_bringup.log"
+    motion_log = logs / f"{side}_vision_handeye_motion.log"
+    capture_log = logs / f"{side}_vision_handeye_capture.log"
+    solve_log = logs / f"{side}_vision_handeye_solve.log"
+    env = os.environ.copy()
+    env.update(context(state))
+    env["PYTHONUNBUFFERED"] = "1"
+
+    processes: list[subprocess.Popen[str]] = []
+
+    def start_logged(command: list[str], log_path: Path) -> subprocess.Popen[str]:
+        log_file = log_path.open("w", encoding="utf-8")
+        proc = subprocess.Popen(
+            command,
+            cwd=workspace,
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+        proc._xlerobot_log_file = log_file  # type: ignore[attr-defined]
+        processes.append(proc)
+        return proc
+
+    try:
+        if existing and stop_existing:
+            print(f"Stopping existing {side} ROS control processes...")
+            stop_side_control_processes(side)
+            _wait_for_controller_manager_absent(side, timeout_s=8.0)
+
+        print(f"Starting arm bringup; log: {bringup_log}")
+        bringup = start_logged(bringup_cmd, bringup_log)
+        _wait_for_controller_active(side, bringup, bringup_log, timeout_s=18.0)
+
+        print(f"Starting Cartesian motion node; log: {motion_log}")
+        motion = start_logged(motion_cmd, motion_log)
+        _wait_for_service(f"/{side}/go_to_pose", motion, motion_log, timeout_s=12.0)
+
+        print("")
+        print("Recorder starting. Use the web page to jog, vary wrist poses, and collect samples.")
+        with capture_log.open("w", encoding="utf-8") as log_file:
+            capture = subprocess.run(
+                capture_cmd,
+                cwd=workspace,
+                env=env,
+                text=True,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        if capture.returncode != 0:
+            mark_step(state, step_id, status="failed", log_path=str(capture_log), error=f"capture exited {capture.returncode}")
+            raise StepError(f"vision hand-eye capture exited {capture.returncode}, see {capture_log}")
+
+        print(f"Solving hand-eye; log: {solve_log}")
+        with solve_log.open("w", encoding="utf-8") as log_file:
+            solve = subprocess.run(
+                solve_cmd,
+                cwd=workspace,
+                env=env,
+                text=True,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        if solve.returncode != 0:
+            mark_step(state, step_id, status="failed", log_path=str(solve_log), error=f"solve exited {solve.returncode}")
+            raise StepError(f"vision hand-eye solve exited {solve.returncode}, see {solve_log}")
+
+        artifacts = [
+            out / "handeye" / side / "samples.jsonl",
+            out / "handeye" / side / "samples_summary.json",
+            out / "extrinsics" / f"world_to_{side}_base.yaml",
+            out / "extrinsics" / f"{side}_wrist_camera_in_gripper.yaml",
+            out / "extrinsics" / f"{side}_vision_handeye_summary.json",
+            out / "extrinsics" / "vision_handeye_summary.json",
+            out / "logs" / "static_tf_world_bases.sh",
+            out / "logs" / "static_tf_wrist_cameras.sh",
+        ]
+        mark_step(state, step_id, status="complete", log_path=str(solve_log), artifacts=[str(path) for path in artifacts])
+        print(f"Saved hand-eye artifacts under {out / 'handeye' / side} and {out / 'extrinsics'}")
     finally:
         for proc in reversed(processes):
             _terminate_process_group(proc)
@@ -624,7 +996,13 @@ def _tail_file(path: Path, lines: int) -> str:
     return "\n".join(path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])
 
 
-def run_action_step(state: dict[str, Any], step: Step, *, dry_run: bool) -> None:
+def run_action_step(state: dict[str, Any], step: Step, *, dry_run: bool, yes: bool = False) -> None:
+    if step.action == "vision_handeye_left":
+        run_vision_handeye(state, "left", dry_run=dry_run, yes=yes)
+        return
+    if step.action == "vision_handeye_right":
+        run_vision_handeye(state, "right", dry_run=dry_run, yes=yes)
+        return
     if dry_run:
         print(f"Would run action: {step.action}")
         mark_step(state, step.id, status="dry_run")

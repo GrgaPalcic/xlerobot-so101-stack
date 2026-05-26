@@ -244,6 +244,23 @@ Top-right was unreachable, so the accepted board touch layout is:
   top_left, bottom_left, bottom_right
 ```
 
+SO-101 touch-base calibration is unreliable for the current dual-arm setup:
+
+```text
+The arms are stiff, geared, and compliant enough that placing one physical
+gripper point on exact board corners by hand or by small jogs is not repeatable.
+Direct joint jogs also expose sag/backlash, especially around shoulder_lift.
+
+Normal XLeRobot calibration should use the vision robot-world/hand-eye flow:
+  fixed 7x5 workspace ChArUco plate defines world
+  wrist camera observes the fixed plate at many varied arm poses
+  TF/joint state gives base <-> gripper for every sample
+  cv2.calibrateRobotWorldHandEye solves world -> base and gripper -> wrist camera
+
+Touch scripts remain as an advanced fallback/debug tool, not the preferred
+field workflow.
+```
+
 ROS control lockups:
 
 ```text

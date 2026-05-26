@@ -9,12 +9,14 @@ from xlerobot_calibration.cli import resolve_existing_state
 from xlerobot_calibration.report import write_report
 from xlerobot_calibration.runner import (
     build_touch_jog_commands,
+    build_vision_handeye_commands,
     generate_controller_configs,
     generate_joint_configs,
     generate_world_files,
     is_missing_config_value,
 )
 from xlerobot_calibration.state import create_state, load_state, mark_step
+from xlerobot_calibration.steps import STEPS
 
 
 def test_state_round_trip(tmp_path: Path):
@@ -177,6 +179,71 @@ def test_touch_jog_tuning_writes_overlay_joint_config(tmp_path: Path):
         assert data["joints"][name]["command_acceleration"] == 20
         assert data["joints"][name]["protection_current"] == 450
     assert "command_speed" not in data["joints"]["gripper"]
+
+
+def test_vision_handeye_commands_use_state_config(tmp_path: Path):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    cfg_dir = workspace / "so101_bringup/config/ros2_control"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "follower_split_controllers.yaml").write_text("follower:\n  controller_manager: {}\n")
+    payload = {
+        name: {
+            "id": idx,
+            "homing_offset": 0,
+            "range_min": 0,
+            "range_max": 4095,
+        }
+        for idx, name in enumerate(
+            ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"],
+            start=1,
+        )
+    }
+    left_json = tmp_path / "left.json"
+    right_json = tmp_path / "right.json"
+    left_info = tmp_path / "left_info.yaml"
+    left_json.write_text(json.dumps(payload))
+    right_json.write_text(json.dumps(payload))
+    left_info.write_text("camera_matrix: {data: [1,0,0,0,1,0,0,0,1]}\n")
+    state = create_state(workspace, run_id="20260517T000000Z")
+    state["config"]["left_port"] = "/dev/serial/by-path/left"
+    state["config"]["left_wrist_dev"] = "/dev/video2"
+    state["config"]["left_wrist_info"] = str(left_info)
+    state["config"]["left_lerobot_json"] = str(left_json)
+    state["config"]["right_lerobot_json"] = str(right_json)
+    generate_controller_configs(state)
+    generate_joint_configs(state)
+    generate_world_files(state)
+
+    bringup, motion, capture, solve = build_vision_handeye_commands(state, "left")
+
+    assert "usb_port:=/dev/serial/by-path/left" in bringup
+    assert "namespace:=left" in bringup
+    assert "arm:=left" in motion
+    assert "--device" in capture
+    assert "/dev/video2" in capture
+    assert "--camera-info" in capture
+    assert str(left_info) in capture
+    assert "--web-port" in capture
+    assert "8780" in capture
+    assert "--joint-jog-topic" in capture
+    assert "/left/arm_forward_controller/commands" in capture
+    assert str(Path(state["out_dir"]) / "handeye/left") in capture
+    assert "solve_wrist_robot_world_handeye.py" in " ".join(solve)
+    assert str(Path(state["out_dir"]) / "handeye/left/samples.jsonl") in solve
+    assert str(Path(state["out_dir"]) / "extrinsics") in solve
+
+
+def test_wizard_uses_vision_handeye_before_camera_extrinsics():
+    ids = [step.id for step in STEPS]
+
+    assert "vision_handeye_left" in ids
+    assert "vision_handeye_right" in ids
+    assert "touch_left_base" not in ids
+    assert "touch_right_base" not in ids
+    assert "invert_touch_solves" not in ids
+    assert ids.index("vision_handeye_left") < ids.index("camera_extrinsics")
+    assert ids.index("vision_handeye_right") < ids.index("camera_extrinsics")
 
 
 def test_workspace_argument_overrides_stale_run_state_workspace(tmp_path: Path):
