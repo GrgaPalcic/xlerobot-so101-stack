@@ -1242,6 +1242,12 @@ def generate_grasp_runtime_config(state: dict[str, Any]) -> list[Path]:
         wrist_yaml = out / "extrinsics" / f"{side}_wrist_camera_in_gripper.yaml"
         if not wrist_yaml.exists():
             raise StepError(f"missing wrist camera extrinsic for {side}: {wrist_yaml}")
+        wrist_data = yaml.safe_load(wrist_yaml.read_text(encoding="utf-8")) or {}
+        wrist_transform = wrist_data.get("transform", {})
+        wrist_translation = [float(value) for value in wrist_transform.get("translation_xyz", [])]
+        wrist_quat = [float(value) for value in wrist_transform.get("quaternion_xyzw", [])]
+        if len(wrist_translation) != 3 or len(wrist_quat) != 4:
+            raise StepError(f"invalid wrist camera extrinsic for {side}: {wrist_yaml}")
         other_side = "right" if side == "left" else "left"
 
         grasping = {
@@ -1282,6 +1288,10 @@ def generate_grasp_runtime_config(state: dict[str, Any]) -> list[Path]:
                     "gripper_action": f"/{side}/gripper_controller/gripper_cmd",
                     "require_wrist_cloud_for_execution": True,
                     "wrist_refine_before_grasp": True,
+                    "wrist_refine_max_xy_shift_m": 0.08,
+                    "wrist_refine_max_z_shift_m": 0.10,
+                    "wrist_camera_xyz_in_ee": wrist_translation,
+                    "wrist_camera_quat_xyzw_in_ee": wrist_quat,
                 }
             },
         }

@@ -1173,6 +1173,13 @@ command runs a fixed-board GoPro/ChArUco verification before motion and then
 requires typing `EXECUTE`. That check catches world/camera drift; the
 wrist-refine stage re-detects the object before descent.
 
+Wrist refinement must stay associated with the original overhead target.
+Refreshed wrist detections are transformed into the active arm base frame and
+rejected if they exceed the same-object gate
+(`wrist_refine_max_xy_shift_m`, `wrist_refine_max_z_shift_m`). If the wrist
+camera sees a pink arm part, cable, or other distractor after the view move,
+execution should stop rather than replan to that object.
+
 The verification solve still uses the calibrated GoPro intrinsics at the same
 image size. The `BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX` environment variable
 only controls the live solvePnP RANSAC inlier gate. If a cube or wrist camera

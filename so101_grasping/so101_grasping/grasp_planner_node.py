@@ -172,6 +172,8 @@ class GraspPlannerNode(Node):
         self.declare_parameter("wrist_refine_require_wrist_cloud", True)
         self.declare_parameter("wrist_refine_min_wrist_cloud_points", 64)
         self.declare_parameter("wrist_refine_fallback_to_initial", False)
+        self.declare_parameter("wrist_refine_max_xy_shift_m", 0.08)
+        self.declare_parameter("wrist_refine_max_z_shift_m", 0.10)
         self.declare_parameter("wrist_camera_xyz_in_ee", [0.002344943, 0.072594056, -0.119362094])
         self.declare_parameter(
             "wrist_camera_quat_xyzw_in_ee",
@@ -255,6 +257,14 @@ class GraspPlannerNode(Node):
         )
         self._wrist_refine_fallback_to_initial = bool(
             self.get_parameter("wrist_refine_fallback_to_initial").value
+        )
+        self._wrist_refine_max_xy_shift_m = max(
+            0.0,
+            float(self.get_parameter("wrist_refine_max_xy_shift_m").value),
+        )
+        self._wrist_refine_max_z_shift_m = max(
+            0.0,
+            float(self.get_parameter("wrist_refine_max_z_shift_m").value),
         )
         self._wrist_camera_xyz_in_ee = np.asarray(
             self.get_parameter("wrist_camera_xyz_in_ee").value,
@@ -434,7 +444,7 @@ class GraspPlannerNode(Node):
             if bool(request.execute):
                 if not bool(self.get_parameter("allow_execution").value):
                     response.message += "; execution refused because allow_execution=false"
-                elif self._wrist_refine_before_grasp:
+                elif bool(self.get_parameter("wrist_refine_before_grasp").value):
                     executed, execute_message, refined_selection = self._execute_wrist_refined_grasp(
                         selection,
                         prompt=prompt,
@@ -646,6 +656,34 @@ class GraspPlannerNode(Node):
         stages = [PrimitiveStage("ready_up", configuration_name=self._ready_configuration_name)]
         stages.append(self._make_wrist_camera_look_stage(selection.grasp))
         return stages
+
+    def _filter_wrist_refine_candidates(
+        self,
+        grasps: list[GraspCandidate],
+        initial_target: np.ndarray,
+    ) -> tuple[list[GraspCandidate], list[str]]:
+        self._wrist_refine_max_xy_shift_m = max(
+            0.0,
+            float(self.get_parameter("wrist_refine_max_xy_shift_m").value),
+        )
+        self._wrist_refine_max_z_shift_m = max(
+            0.0,
+            float(self.get_parameter("wrist_refine_max_z_shift_m").value),
+        )
+        kept: list[GraspCandidate] = []
+        rejected: list[str] = []
+        for idx, grasp in enumerate(grasps):
+            position, _, _ = _pose_to_numpy(grasp.pose)
+            xy_shift = float(np.linalg.norm(position[:2] - initial_target[:2]))
+            z_shift = abs(float(position[2] - initial_target[2]))
+            if xy_shift > self._wrist_refine_max_xy_shift_m or z_shift > self._wrist_refine_max_z_shift_m:
+                rejected.append(
+                    f"{idx}:shift_xy={xy_shift:.3f}m z={z_shift:.3f}m "
+                    f"pos=({position[0]:.3f},{position[1]:.3f},{position[2]:.3f})"
+                )
+                continue
+            kept.append(grasp)
+        return kept, rejected
 
     def _target_position_options(self, grasp: GraspCandidate) -> list[tuple[str, np.ndarray]]:
         grasp_position, _, _ = _pose_to_numpy(grasp.pose)
@@ -1240,6 +1278,7 @@ class GraspPlannerNode(Node):
         if not open_ok:
             return False, f"wrist-refine stopped before arm motion: {open_message}", None
 
+        initial_target = self._wrist_refine_target(initial_selection.grasp).copy()
         executed_messages = [f"preopen: {open_message}"]
         view_stages = self._wrist_refine_view_stages(initial_selection)
         view_ok, view_message = self._execute_arm_stages(
@@ -1291,6 +1330,42 @@ class GraspPlannerNode(Node):
                 )
             return False, f"wrist-refine produced no usable candidates after view move: {reason}", None
 
+        try:
+            refreshed_grasps = [self._grasp_to_arm_base(grasp) for grasp in detect_response.grasps]
+        except Exception as exc:  # noqa: BLE001 - keep hardware run result explicit.
+            if self._wrist_refine_fallback_to_initial:
+                fallback_ok, fallback_message = self._execute_primitive(
+                    initial_selection.primitive_stages,
+                    prompt=prompt,
+                    top_k=top_k,
+                    open_first=False,
+                )
+                return (
+                    fallback_ok,
+                    "wrist-refine transform failed; fell back to initial plan: "
+                    + f"{exc}; {fallback_message}",
+                    initial_selection,
+                )
+            return False, f"wrist-refine failed to transform refreshed candidates: {exc}", None
+
+        refreshed_grasps, rejected = self._filter_wrist_refine_candidates(refreshed_grasps, initial_target)
+        if not refreshed_grasps:
+            reason = "; ".join(rejected[:6]) if rejected else "no candidates after same-object gate"
+            if self._wrist_refine_fallback_to_initial:
+                fallback_ok, fallback_message = self._execute_primitive(
+                    initial_selection.primitive_stages,
+                    prompt=prompt,
+                    top_k=top_k,
+                    open_first=False,
+                )
+                return (
+                    fallback_ok,
+                    "wrist-refine rejected refreshed candidates; fell back to initial plan: "
+                    + f"{reason}; {fallback_message}",
+                    initial_selection,
+                )
+            return False, f"wrist-refine rejected refreshed candidates too far from initial target: {reason}", None
+
         wrist_ok, wrist_message = self._wrist_refine_cloud_check()
         if not wrist_ok:
             if self._wrist_refine_fallback_to_initial:
@@ -1309,7 +1384,7 @@ class GraspPlannerNode(Node):
             return False, "wrist-refine refused overhead-only replan: " + wrist_message, None
 
         refined_selection, failures = self._select_plan_from_grasps(
-            detect_response.grasps,
+            refreshed_grasps,
             requested_index=0,
             pregrasp_offset=pregrasp_offset,
             deadline=max(deadline, time.monotonic() + self._wrist_refine_plan_budget_s),

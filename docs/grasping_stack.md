@@ -53,6 +53,13 @@ for that one service call. This board check catches camera/world drift; the
 wrist-refine stage re-detects the object before descent to catch local
 object/arm error.
 
+Wrist refinement must remain tied to the original overhead target. Refreshed
+wrist detections are transformed into the active arm base frame, then rejected
+if they move more than the configured same-object gate
+(`wrist_refine_max_xy_shift_m`, `wrist_refine_max_z_shift_m`) from the initial
+target. This prevents the wrist camera from latching onto pink arm parts or
+other distractors after the view move.
+
 The board check uses the same GoPro intrinsics and image size as calibration.
 Its `BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX` setting is only the solvePnP
 RANSAC inlier gate for the live verification frame. If the cube or wrist camera
