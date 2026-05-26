@@ -24,6 +24,7 @@ fi
 ROS_SETUP="${ROS_SETUP:-/opt/ros/jazzy/setup.bash}"
 DEFAULT_TOP_K="${DEFAULT_TOP_K:-8}"
 SUPERVISOR_CAPTURE_SNAPSHOTS="${SUPERVISOR_CAPTURE_SNAPSHOTS:-true}"
+SUPERVISOR_RESTART_STACK="${SUPERVISOR_RESTART_STACK:-true}"
 
 export WRIST_REFINE_BEFORE_GRASP="${WRIST_REFINE_BEFORE_GRASP:-true}"
 export WRIST_REFINE_REQUIRE_WRIST_CLOUD="${WRIST_REFINE_REQUIRE_WRIST_CLOUD:-true}"
@@ -69,9 +70,13 @@ WRIST_REFINE_MAX_VIEW_ATTEMPTS=${WRIST_REFINE_MAX_VIEW_ATTEMPTS}
 WRIST_REFINE_REQUIRE_WRIST_CLOUD=${WRIST_REFINE_REQUIRE_WRIST_CLOUD}
 WRIST_REFINE_MIN_WRIST_CLOUD_POINTS=${WRIST_REFINE_MIN_WRIST_CLOUD_POINTS}
 POST_GRASP_LIFT_M=${POST_GRASP_LIFT_M}
+SUPERVISOR_RESTART_STACK=${SUPERVISOR_RESTART_STACK}
 EOF
 
 echo "supervised pick session: ${session_dir}"
+if [[ "${SUPERVISOR_RESTART_STACK}" == "true" || "${SUPERVISOR_RESTART_STACK}" == "1" ]]; then
+  "${XLEROBOT_WS}/scripts/xlerobot_grasp_stack.sh" down "${side}" | tee "${session_dir}/stack_down.log" || true
+fi
 "${XLEROBOT_WS}/scripts/xlerobot_grasp_stack.sh" up "${side}" | tee "${session_dir}/stack_up.log"
 capture_snapshot "before"
 
