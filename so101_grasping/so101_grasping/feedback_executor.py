@@ -50,6 +50,12 @@ def pose_to_matrix(pose_stamped: PoseStamped) -> np.ndarray:
     return matrix
 
 
+def rotation_error_rad(actual: np.ndarray, desired: np.ndarray) -> float:
+    delta = desired[:3, :3].T @ actual[:3, :3]
+    trace = float(np.clip((np.trace(delta) - 1.0) * 0.5, -1.0, 1.0))
+    return float(math.acos(trace))
+
+
 def quintic_ease(value: float) -> float:
     value = float(np.clip(value, 0.0, 1.0))
     return float(10.0 * value**3 - 15.0 * value**4 + 6.0 * value**5)
@@ -78,19 +84,15 @@ class FeedbackArmExecutor:
         self._gripper_joint_name = gripper_joint_name
 
         model = load_robot_description("so_arm101_description")
-        self._solver = PlacoKinematics(
-            urdf_path=str(model.urdf_path),
-            ee_frame=ee_frame,
-            # Match the SO-101 grasp primitive: solve EE position first, then
-            # stream the measured-joint correction with explicit timing.
-            cfg=PlacoConfig(
-                dt=1.0 / 50.0,
-                rot_weight=0.0,
-                enable_velocity_limits=False,
-                enable_self_collisions=False,
-            ),
-        )
+        self._urdf_path = str(model.urdf_path)
+        # Match the SO-101 grasp primitive: solve EE position first, then
+        # stream the measured-joint correction with explicit timing.
+        self._solver = self._make_solver(rot_weight=0.0)
+        self._look_rot_weight = 0.35
+        self._look_solver = self._make_solver(rot_weight=self._look_rot_weight)
         self._joint_names = list(self._solver.joint_names)
+        if list(self._look_solver.joint_names) != self._joint_names:
+            raise RuntimeError("feedback look IK solver joint order differs from position solver")
         self._arm_indices = [self._joint_names.index(name) for name in self._arm_joint_names]
         self._gripper_index = self._joint_names.index(self._gripper_joint_name)
         self._wrist_roll_index = (
@@ -121,6 +123,19 @@ class FeedbackArmExecutor:
         self.joint_state_timeout_s = 3.0
         self.correction_command_gain = 1.45
         self.max_overcommand_rad = 0.12
+        self.look_rotation_tolerance_rad = math.radians(20.0)
+
+    def _make_solver(self, *, rot_weight: float) -> PlacoKinematics:
+        return PlacoKinematics(
+            urdf_path=self._urdf_path,
+            ee_frame=self._ee_frame,
+            cfg=PlacoConfig(
+                dt=1.0 / 50.0,
+                rot_weight=float(rot_weight),
+                enable_velocity_limits=False,
+                enable_self_collisions=False,
+            ),
+        )
 
     @property
     def joint_names(self) -> list[str]:
@@ -145,6 +160,8 @@ class FeedbackArmExecutor:
         joint_state_timeout_s: float,
         correction_command_gain: float,
         max_overcommand_rad: float,
+        look_rot_weight: float,
+        look_rotation_tolerance_rad: float,
     ) -> None:
         self.rate_hz = max(5.0, float(rate_hz))
         self.position_tolerance_m = max(0.001, float(position_tolerance_m))
@@ -158,6 +175,11 @@ class FeedbackArmExecutor:
         self.joint_state_timeout_s = max(0.2, float(joint_state_timeout_s))
         self.correction_command_gain = max(1.0, float(correction_command_gain))
         self.max_overcommand_rad = max(0.0, float(max_overcommand_rad))
+        look_rot_weight = max(0.001, float(look_rot_weight))
+        if not math.isclose(look_rot_weight, self._look_rot_weight, rel_tol=1e-6, abs_tol=1e-9):
+            self._look_rot_weight = look_rot_weight
+            self._look_solver = self._make_solver(rot_weight=self._look_rot_weight)
+        self.look_rotation_tolerance_rad = max(math.radians(2.0), float(look_rotation_tolerance_rad))
 
     def _on_joint_state(self, msg: JointState) -> None:
         values = self._measured_q.copy() if self._measured_q is not None else np.zeros(len(self._joint_names))
@@ -206,6 +228,9 @@ class FeedbackArmExecutor:
         desired = pose_to_matrix(target)[:3, 3]
         return np.asarray(actual - desired, dtype=np.float64)
 
+    def pose_rotation_error(self, q: np.ndarray, target: PoseStamped) -> float:
+        return rotation_error_rad(self.fk(q), pose_to_matrix(target))
+
     def solve_sequence(
         self,
         stages: list[Any],
@@ -250,6 +275,21 @@ class FeedbackArmExecutor:
             return self._solve_pose_stage(stage.name, stage.pose, q_seed)
         return None, None
 
+    def _stage_uses_pose_orientation(self, stage_name: str) -> bool:
+        return stage_name == "wrist_camera_look"
+
+    def _pose_stage_reached(self, stage_name: str, q: np.ndarray, pose: PoseStamped) -> tuple[bool, float, float | None]:
+        pos_error = self.pose_position_error(q, pose)
+        if not self._stage_uses_pose_orientation(stage_name):
+            return pos_error <= self.position_tolerance_m, pos_error, None
+        rot_error = self.pose_rotation_error(q, pose)
+        return (
+            pos_error <= self.position_tolerance_m
+            and rot_error <= self.look_rotation_tolerance_rad,
+            pos_error,
+            rot_error,
+        )
+
     def execute_stage(
         self,
         stage: Any,
@@ -273,15 +313,26 @@ class FeedbackArmExecutor:
                 tolerance = self.joint_tolerance_rad
                 metric_name = "joint_error"
             elif getattr(stage, "pose", None) is not None:
-                actual_error = self.pose_position_error(measured, stage.pose)
-                if actual_error <= self.position_tolerance_m:
-                    return True, f"{stage.name}: reached pose pos_error={actual_error * 1000.0:.1f}mm"
+                reached, actual_error, rot_error = self._pose_stage_reached(stage.name, measured, stage.pose)
+                if reached:
+                    message = f"{stage.name}: reached pose pos_error={actual_error * 1000.0:.1f}mm"
+                    if rot_error is not None:
+                        message += f" rot_error={math.degrees(rot_error):.1f}deg"
+                    return True, message
                 result, q_goal = self._solve_pose_stage(stage.name, stage.pose, measured)
                 if result is None or q_goal is None:
                     return False, f"{stage.name}: feedback IK failed"
-                metric = actual_error
-                tolerance = self.position_tolerance_m
-                metric_name = "pos_error"
+                if rot_error is None:
+                    metric = actual_error
+                    tolerance = self.position_tolerance_m
+                    metric_name = "pos_error"
+                else:
+                    metric = max(
+                        actual_error / self.position_tolerance_m,
+                        rot_error / self.look_rotation_tolerance_rad,
+                    )
+                    tolerance = 1.0
+                    metric_name = "pose_error_ratio"
             else:
                 return False, f"{stage.name}: no pose or named target"
 
@@ -324,11 +375,20 @@ class FeedbackArmExecutor:
             if getattr(stage, "pose", None) is not None:
                 after_error = self.pose_position_error(after, stage.pose)
                 after_delta = self.pose_position_delta(after, stage.pose)
+                rot_error = (
+                    self.pose_rotation_error(after, stage.pose)
+                    if self._stage_uses_pose_orientation(stage.name)
+                    else None
+                )
+                rot_text = ""
+                if rot_error is not None:
+                    rot_text = f" rot_error={math.degrees(rot_error):.1f}deg"
                 self._node.get_logger().info(
                     f"{stage.name}: feedback attempt {attempt + 1}/"
                     f"{self.max_correction_iters + 1} pos_error={after_error * 1000.0:.1f}mm "
                     f"delta_xyz_mm=({after_delta[0] * 1000.0:.1f},"
                     f"{after_delta[1] * 1000.0:.1f},{after_delta[2] * 1000.0:.1f})"
+                    f"{rot_text}"
                 )
             else:
                 after_error = self._arm_joint_error(after, q_goal)
@@ -340,12 +400,20 @@ class FeedbackArmExecutor:
         measured = self.measured_q(timeout_s=0.2)
         if measured is not None and getattr(stage, "pose", None) is not None:
             delta = self.pose_position_delta(measured, stage.pose)
+            rot_error = (
+                self.pose_rotation_error(measured, stage.pose)
+                if self._stage_uses_pose_orientation(stage.name)
+                else None
+            )
+            rot_text = ""
+            if rot_error is not None:
+                rot_text = f", rot_error={math.degrees(rot_error):.1f}deg"
             return (
                 False,
                 f"{stage.name}: feedback max corrections reached "
                 f"(pos_error={self.pose_position_error(measured, stage.pose) * 1000.0:.1f}mm, "
                 f"delta_xyz_mm=({delta[0] * 1000.0:.1f},{delta[1] * 1000.0:.1f},"
-                f"{delta[2] * 1000.0:.1f}))",
+                f"{delta[2] * 1000.0:.1f}){rot_text})",
             )
         if measured is not None and getattr(stage, "configuration_name", None) is not None:
             _, q_goal = self._solve_named_stage(stage.name, str(stage.configuration_name), measured)
@@ -416,8 +484,11 @@ class FeedbackArmExecutor:
             )
             return result, None
         target = pose_to_matrix(pose)
+        uses_orientation = self._stage_uses_pose_orientation(stage_name)
+        solver = self._look_solver if uses_orientation else self._solver
+        n_iters = 200 if uses_orientation else 100
         try:
-            q_goal = np.asarray(self._solver.solve_goal(q_seed, target, n_iters=100), dtype=np.float64)
+            q_goal = np.asarray(solver.solve_goal(q_seed, target, n_iters=n_iters), dtype=np.float64)
         except Exception as exc:  # noqa: BLE001 - surfaced to ROS service response.
             result = FeedbackStageResult(
                 name=stage_name,
@@ -432,6 +503,7 @@ class FeedbackArmExecutor:
             return None, None
         q_goal[self._gripper_index] = q_seed[self._gripper_index]
         pos_error = self.pose_position_error(q_goal, pose)
+        rot_error = self.pose_rotation_error(q_goal, pose) if uses_orientation else None
         if pos_error > self.ik_position_tolerance_m:
             result = FeedbackStageResult(
                 name=stage_name,
@@ -445,13 +517,16 @@ class FeedbackArmExecutor:
                 ),
             )
             return result, None
+        rot_text = ""
+        if rot_error is not None:
+            rot_text = f" rot_error={math.degrees(rot_error):.1f}deg look_rot_weight={self._look_rot_weight:.3f}"
         result = FeedbackStageResult(
             name=stage_name,
             joint_names=self.arm_joint_names,
             positions=[float(q_goal[index]) for index in self._arm_indices],
             position_error_m=pos_error,
             joint_error_rad=None,
-            message=f"feedback IK solved pos_error={pos_error * 1000.0:.1f}mm",
+            message=f"feedback IK solved pos_error={pos_error * 1000.0:.1f}mm{rot_text}",
         )
         return result, q_goal
 

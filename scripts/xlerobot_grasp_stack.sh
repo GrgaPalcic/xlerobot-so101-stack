@@ -30,6 +30,8 @@ FEEDBACK_MAX_CORRECTION_ITERS="${FEEDBACK_MAX_CORRECTION_ITERS:-4}"
 FEEDBACK_MIN_JOINT_DELTA_RAD="${FEEDBACK_MIN_JOINT_DELTA_RAD:-0.035}"
 FEEDBACK_CORRECTION_COMMAND_GAIN="${FEEDBACK_CORRECTION_COMMAND_GAIN:-1.45}"
 FEEDBACK_MAX_OVERCOMMAND_RAD="${FEEDBACK_MAX_OVERCOMMAND_RAD:-0.12}"
+FEEDBACK_LOOK_ROT_WEIGHT="${FEEDBACK_LOOK_ROT_WEIGHT:-0.35}"
+FEEDBACK_LOOK_ROTATION_TOLERANCE_DEG="${FEEDBACK_LOOK_ROTATION_TOLERANCE_DEG:-20.0}"
 WRIST_CONFIRMATION_BEFORE_DESCENT="${WRIST_CONFIRMATION_BEFORE_DESCENT:-true}"
 REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION="${REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION:-false}"
 REQUIRE_WRIST_CLOUD_FOR_EXECUTION="${REQUIRE_WRIST_CLOUD_FOR_EXECUTION:-false}"
@@ -281,6 +283,8 @@ apply_planner_runtime_params() {
   ros2 param set "/${side}_grasp/grasp_planner_node" feedback_min_joint_delta_rad "${FEEDBACK_MIN_JOINT_DELTA_RAD}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" feedback_correction_command_gain "${FEEDBACK_CORRECTION_COMMAND_GAIN}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" feedback_max_overcommand_rad "${FEEDBACK_MAX_OVERCOMMAND_RAD}" >/dev/null
+  ros2 param set "/${side}_grasp/grasp_planner_node" feedback_look_rot_weight "${FEEDBACK_LOOK_ROT_WEIGHT}" >/dev/null
+  ros2 param set "/${side}_grasp/grasp_planner_node" feedback_look_rotation_tolerance_deg "${FEEDBACK_LOOK_ROTATION_TOLERANCE_DEG}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" wrist_confirmation_before_descent "${WRIST_CONFIRMATION_BEFORE_DESCENT}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" require_wrist_confirmation_for_execution "${REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION}" >/dev/null
   ros2 param set "/${side}_grasp/grasp_planner_node" require_wrist_cloud_for_execution "${REQUIRE_WRIST_CLOUD_FOR_EXECUTION}" >/dev/null
@@ -309,7 +313,7 @@ plan() {
   apply_planner_runtime_params
   echo "execution_backend=${EXECUTION_BACKEND}"
   echo "wrist_roll prefer_low=${PREFER_LOW_WRIST_ROLL} preferred_delta=${PREFERRED_WRIST_ROLL_DELTA_RAD} max_delta=${MAX_WRIST_ROLL_DELTA_RAD}"
-  echo "feedback tolerance=${FEEDBACK_POSITION_TOLERANCE_M}m corrections=${FEEDBACK_MAX_CORRECTION_ITERS} min_joint_delta=${FEEDBACK_MIN_JOINT_DELTA_RAD}rad correction_gain=${FEEDBACK_CORRECTION_COMMAND_GAIN} max_overcommand=${FEEDBACK_MAX_OVERCOMMAND_RAD}rad"
+  echo "feedback tolerance=${FEEDBACK_POSITION_TOLERANCE_M}m corrections=${FEEDBACK_MAX_CORRECTION_ITERS} min_joint_delta=${FEEDBACK_MIN_JOINT_DELTA_RAD}rad correction_gain=${FEEDBACK_CORRECTION_COMMAND_GAIN} max_overcommand=${FEEDBACK_MAX_OVERCOMMAND_RAD}rad look_rot_weight=${FEEDBACK_LOOK_ROT_WEIGHT} look_rot_tol=${FEEDBACK_LOOK_ROTATION_TOLERANCE_DEG}deg"
   echo "wrist_confirmation before_descent=${WRIST_CONFIRMATION_BEFORE_DESCENT} require_match=${REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION} require_cloud=${REQUIRE_WRIST_CLOUD_FOR_EXECUTION}"
   call_ros_service "${PLAN_CALL_TIMEOUT_S}" "${LOG_DIR}/${side}_plan_grasp.txt" \
     "/${side}_grasp/plan_grasp" so101_grasp_msgs/srv/PlanGrasp \
@@ -427,7 +431,7 @@ execute_grasp() {
   echo "wrist_refine_before_grasp=${WRIST_REFINE_BEFORE_GRASP}"
   echo "wrist_refine camera_standoff=${WRIST_REFINE_CAMERA_STANDOFF_M}m min_ee_z=${WRIST_REFINE_MIN_EE_Z_M}m require_cloud=${WRIST_REFINE_REQUIRE_WRIST_CLOUD} min_cloud_points=${WRIST_REFINE_MIN_WRIST_CLOUD_POINTS}"
   echo "wrist_roll prefer_low=${PREFER_LOW_WRIST_ROLL} preferred_delta=${PREFERRED_WRIST_ROLL_DELTA_RAD} max_delta=${MAX_WRIST_ROLL_DELTA_RAD}"
-  echo "feedback tolerance=${FEEDBACK_POSITION_TOLERANCE_M}m corrections=${FEEDBACK_MAX_CORRECTION_ITERS} min_joint_delta=${FEEDBACK_MIN_JOINT_DELTA_RAD}rad correction_gain=${FEEDBACK_CORRECTION_COMMAND_GAIN} max_overcommand=${FEEDBACK_MAX_OVERCOMMAND_RAD}rad"
+  echo "feedback tolerance=${FEEDBACK_POSITION_TOLERANCE_M}m corrections=${FEEDBACK_MAX_CORRECTION_ITERS} min_joint_delta=${FEEDBACK_MIN_JOINT_DELTA_RAD}rad correction_gain=${FEEDBACK_CORRECTION_COMMAND_GAIN} max_overcommand=${FEEDBACK_MAX_OVERCOMMAND_RAD}rad look_rot_weight=${FEEDBACK_LOOK_ROT_WEIGHT} look_rot_tol=${FEEDBACK_LOOK_ROTATION_TOLERANCE_DEG}deg"
   echo "wrist_confirmation before_descent=${WRIST_CONFIRMATION_BEFORE_DESCENT} require_match=${REQUIRE_WRIST_CONFIRMATION_FOR_EXECUTION} require_cloud=${REQUIRE_WRIST_CLOUD_FOR_EXECUTION}"
   ros2 param set "/${side}_grasp/grasp_planner_node" allow_execution true >/dev/null
   trap 'ros2 param set "/'"${side}"'_grasp/grasp_planner_node" allow_execution false >/dev/null 2>&1 || true' EXIT

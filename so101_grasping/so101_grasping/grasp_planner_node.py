@@ -146,6 +146,8 @@ class GraspPlannerNode(Node):
         self.declare_parameter("feedback_joint_state_timeout_s", 3.0)
         self.declare_parameter("feedback_correction_command_gain", 1.45)
         self.declare_parameter("feedback_max_overcommand_rad", 0.12)
+        self.declare_parameter("feedback_look_rot_weight", 0.35)
+        self.declare_parameter("feedback_look_rotation_tolerance_deg", 20.0)
         self.declare_parameter("object_cloud_topic", "/so101_grasping/object_cloud")
         self.declare_parameter("wrist_object_cloud_topic", "/so101_grasping/wrist_object_cloud")
         self.declare_parameter("display_topic", "/so101_grasping/display_planned_path")
@@ -447,6 +449,10 @@ class GraspPlannerNode(Node):
             joint_state_timeout_s=float(self.get_parameter("feedback_joint_state_timeout_s").value),
             correction_command_gain=float(self.get_parameter("feedback_correction_command_gain").value),
             max_overcommand_rad=float(self.get_parameter("feedback_max_overcommand_rad").value),
+            look_rot_weight=float(self.get_parameter("feedback_look_rot_weight").value),
+            look_rotation_tolerance_rad=np.deg2rad(
+                float(self.get_parameter("feedback_look_rotation_tolerance_deg").value)
+            ),
         )
 
     def _float_parameter_list(self, name: str, fallback: list[float]) -> list[float]:
