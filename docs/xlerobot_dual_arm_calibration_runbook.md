@@ -1184,6 +1184,12 @@ The runtime also skips the MoveIt named `zero` pose by default. Plans start
 from the live joint state and go directly toward the over-object/pregrasp
 sequence, avoiding a large detour through an arbitrary canonical pose.
 
+The planner also prefers low `wrist_roll` motion. It evaluates feasible grasp
+primitive options by the actual planned wrist-roll delta, accepts a low-roll
+option at or below `0.35` rad, and rejects options above `0.90` rad by default.
+Use `MAX_WRIST_ROLL_DELTA_RAD=0` only as a debug override if a target really
+needs a larger roll.
+
 Wrist refinement must stay associated with the original overhead target.
 Refreshed wrist detections are transformed into the active arm base frame and
 rejected if they exceed the same-object gate

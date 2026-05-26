@@ -65,6 +65,7 @@ class PlanSelection:
     primitive_stages: list[PrimitiveStage]
     strategy_label: str
     message: str
+    wrist_roll_delta_rad: float | None = None
 
 
 def _point(values: np.ndarray) -> Point:
@@ -157,6 +158,9 @@ class GraspPlannerNode(Node):
         self.declare_parameter("default_plan_budget_s", 20.0)
         self.declare_parameter("max_plan_candidates", 3)
         self.declare_parameter("max_primitive_options_per_candidate", 16)
+        self.declare_parameter("prefer_low_wrist_roll", True)
+        self.declare_parameter("preferred_wrist_roll_delta_rad", 0.35)
+        self.declare_parameter("max_wrist_roll_delta_rad", 0.90)
         self.declare_parameter("use_pose_goal_fallback", True)
         self.declare_parameter("grasp_pitch_options_rad", [2.20, 2.55, 2.90, 3.141592653589793])
         self.declare_parameter("cloud_target_z_percentiles", [35.0, 55.0, 75.0])
@@ -219,6 +223,12 @@ class GraspPlannerNode(Node):
             1,
             int(self.get_parameter("max_primitive_options_per_candidate").value),
         )
+        self._prefer_low_wrist_roll = bool(self.get_parameter("prefer_low_wrist_roll").value)
+        self._preferred_wrist_roll_delta_rad = max(
+            0.0,
+            float(self.get_parameter("preferred_wrist_roll_delta_rad").value),
+        )
+        self._max_wrist_roll_delta_rad = float(self.get_parameter("max_wrist_roll_delta_rad").value)
         self._use_pose_goal_fallback = bool(self.get_parameter("use_pose_goal_fallback").value)
         self._grasp_pitch_options_rad = self._float_parameter_list(
             "grasp_pitch_options_rad",
@@ -335,6 +345,7 @@ class GraspPlannerNode(Node):
         self._moveit_joint_names = list(getattr(joint_model_group, "active_joint_model_names", []))
         if not self._moveit_joint_names:
             self._moveit_joint_names = list(ARM_JOINT_NAMES)
+        self._wrist_roll_joint_name = self._find_joint_name("wrist_roll")
         self._arm = self._moveit.get_planning_component(PLANNING_GROUP)
         self._plan_params = MultiPipelinePlanRequestParameters(self._moveit, [self._planner_parameter_set])
         self.get_logger().info(
@@ -537,6 +548,9 @@ class GraspPlannerNode(Node):
         ordered_grasps = ordered_grasps[: self._max_plan_candidates]
 
         failures: list[str] = []
+        best_selection: PlanSelection | None = None
+        best_wrist_delta = float("inf")
+        reference_wrist_roll = self._current_wrist_roll()
         for idx, grasp in enumerate(ordered_grasps):
             if time.monotonic() >= deadline:
                 failures.append(f"planning budget exhausted after {idx} candidate(s)")
@@ -568,17 +582,39 @@ class GraspPlannerNode(Node):
                 self.get_logger().info(f"Trying candidate {idx} SO-101 primitive {option_label}")
                 planned_stages, message = self._plan_pose_sequence(pose_stages, deadline=deadline)
                 if planned_stages:
-                    return (
-                        PlanSelection(
-                            candidate_index=idx,
-                            grasp=grasp,
-                            planned_stages=planned_stages,
-                            primitive_stages=pose_stages,
-                            strategy_label=option_label,
-                            message=message,
-                        ),
-                        failures,
+                    wrist_delta = self._planned_stages_wrist_roll_delta(
+                        planned_stages,
+                        reference_wrist_roll,
                     )
+                    wrist_reject_reason = self._wrist_roll_reject_reason(wrist_delta)
+                    if wrist_reject_reason is not None:
+                        failures.append(f"candidate {idx} {option_label}: {wrist_reject_reason}")
+                        continue
+
+                    wrist_note = self._wrist_roll_note(wrist_delta)
+                    selection = PlanSelection(
+                        candidate_index=idx,
+                        grasp=grasp,
+                        planned_stages=planned_stages,
+                        primitive_stages=pose_stages,
+                        strategy_label=option_label,
+                        message=message + wrist_note,
+                        wrist_roll_delta_rad=wrist_delta,
+                    )
+                    if not self._prefer_low_wrist_roll_enabled() or wrist_delta is None:
+                        return selection, failures
+                    preferred_delta = self._preferred_wrist_roll_delta()
+                    if wrist_delta <= preferred_delta:
+                        return selection, failures
+                    if wrist_delta < best_wrist_delta:
+                        best_selection = selection
+                        best_wrist_delta = wrist_delta
+                    failures.append(
+                        f"candidate {idx} {option_label}: feasible but wrist_roll_delta="
+                        f"{wrist_delta:.3f}rad; searching for <= {preferred_delta:.3f}rad"
+                    )
+                    continue
+
                 final_pose_stage = next((stage for stage in reversed(pose_stages) if stage.pose is not None), None)
                 final_pose = final_pose_stage.pose.pose.position if final_pose_stage is not None else Point()
                 failures.append(
@@ -587,6 +623,8 @@ class GraspPlannerNode(Node):
                 )
             if not attempted:
                 failures.append(f"candidate {idx}: no SO-101 primitive options generated")
+        if best_selection is not None:
+            return best_selection, failures
         return None, failures
 
     def _strip_initial_ready_stage(self, stages: list[PrimitiveStage]) -> list[PrimitiveStage]:
@@ -836,6 +874,12 @@ class GraspPlannerNode(Node):
     def _normalize_angle(self, radians: float) -> float:
         return float((radians + np.pi) % (2.0 * np.pi) - np.pi)
 
+    def _find_joint_name(self, suffix: str) -> str | None:
+        for name in self._moveit_joint_names or ARM_JOINT_NAMES:
+            if name == suffix or name.endswith(f"/{suffix}"):
+                return name
+        return None
+
     def _make_pose(self, position: np.ndarray, quat: np.ndarray) -> PoseStamped:
         pose = PoseStamped()
         pose.header.frame_id = self._moveit_frame
@@ -933,6 +977,84 @@ class GraspPlannerNode(Node):
         if joint_trajectory is None:
             raise AttributeError(f"Plan trajectory has no joint_trajectory: {type(trajectory_msg)!r}")
         return joint_trajectory
+
+    def _state_joint_position(self, state: RobotState, joint_name: str | None) -> float | None:
+        if joint_name is None:
+            return None
+        joint_names = self._moveit_joint_names or ARM_JOINT_NAMES
+        if joint_name not in joint_names:
+            return None
+        positions = list(state.get_joint_group_positions(PLANNING_GROUP))
+        index = joint_names.index(joint_name)
+        if index >= len(positions):
+            return None
+        return float(positions[index])
+
+    def _current_wrist_roll(self) -> float | None:
+        try:
+            return self._state_joint_position(self._current_robot_state(), self._wrist_roll_joint_name)
+        except Exception as exc:  # noqa: BLE001 - planning can continue without the roll heuristic.
+            self.get_logger().warning(f"Could not read current wrist_roll for grasp scoring: {exc}")
+            return None
+
+    def _trajectory_wrist_roll_delta(self, plan_result: Any, reference_roll: float | None) -> float | None:
+        if reference_roll is None or self._wrist_roll_joint_name is None:
+            return None
+        trajectory = self._joint_trajectory_from_plan(plan_result)
+        joint_names = list(trajectory.joint_names)
+        if self._wrist_roll_joint_name not in joint_names:
+            return None
+        index = joint_names.index(self._wrist_roll_joint_name)
+        max_delta = 0.0
+        found = False
+        for point in trajectory.points:
+            positions = list(point.positions)
+            if index >= len(positions):
+                continue
+            found = True
+            delta = abs(self._normalize_angle(float(positions[index]) - reference_roll))
+            max_delta = max(max_delta, delta)
+        return max_delta if found else None
+
+    def _planned_stages_wrist_roll_delta(
+        self,
+        planned_stages: list[PlannedStage],
+        reference_roll: float | None,
+    ) -> float | None:
+        deltas = [
+            delta
+            for stage in planned_stages
+            if (delta := self._trajectory_wrist_roll_delta(stage.result, reference_roll)) is not None
+        ]
+        return max(deltas) if deltas else None
+
+    def _prefer_low_wrist_roll_enabled(self) -> bool:
+        self._prefer_low_wrist_roll = bool(self.get_parameter("prefer_low_wrist_roll").value)
+        return self._prefer_low_wrist_roll
+
+    def _preferred_wrist_roll_delta(self) -> float:
+        self._preferred_wrist_roll_delta_rad = max(
+            0.0,
+            float(self.get_parameter("preferred_wrist_roll_delta_rad").value),
+        )
+        return self._preferred_wrist_roll_delta_rad
+
+    def _max_wrist_roll_delta(self) -> float:
+        self._max_wrist_roll_delta_rad = float(self.get_parameter("max_wrist_roll_delta_rad").value)
+        return self._max_wrist_roll_delta_rad
+
+    def _wrist_roll_reject_reason(self, wrist_delta: float | None) -> str | None:
+        limit = self._max_wrist_roll_delta()
+        if wrist_delta is None or limit <= 0.0:
+            return None
+        if wrist_delta > limit:
+            return f"wrist_roll_delta={wrist_delta:.3f}rad exceeds max_wrist_roll_delta_rad={limit:.3f}"
+        return None
+
+    def _wrist_roll_note(self, wrist_delta: float | None) -> str:
+        if wrist_delta is None:
+            return ""
+        return f"; wrist_roll_delta={wrist_delta:.3f}rad"
 
     def _state_from_plan_end(self, plan_result: Any, fallback: RobotState) -> RobotState:
         trajectory = self._joint_trajectory_from_plan(plan_result)
@@ -1201,6 +1323,7 @@ class GraspPlannerNode(Node):
         executed_messages: list[str],
         refresh_before_descent: bool,
     ) -> tuple[bool, str]:
+        reference_wrist_roll = self._current_wrist_roll()
         for stage in stages:
             if stage.name.endswith("descent_close"):
                 refresh_message = (
@@ -1221,6 +1344,13 @@ class GraspPlannerNode(Node):
             plan_result, expected_state, plan_message = self._plan_primitive_stage_from_current(stage)
             if not plan_result or expected_state is None:
                 return False, f"execution stopped at {stage.name}: {plan_message}"
+            wrist_delta = self._trajectory_wrist_roll_delta(plan_result, reference_wrist_roll)
+            wrist_reject_reason = self._wrist_roll_reject_reason(wrist_delta)
+            if wrist_reject_reason is not None:
+                return False, f"execution stopped at {stage.name}: {wrist_reject_reason}"
+            wrist_note = self._wrist_roll_note(wrist_delta)
+            plan_message += wrist_note
+            self.get_logger().info(f"{stage.name}: {plan_message}")
 
             self.get_logger().info(f"Executing SO-101 grasp stage: {stage.name}")
             execute_result = self._moveit.execute(plan_result.trajectory, controllers=[])
@@ -1230,6 +1360,7 @@ class GraspPlannerNode(Node):
             if self._post_stage_settle_s > 0.0:
                 time.sleep(self._post_stage_settle_s)
             verify_ok, verify_message = self._verify_arm_state(expected_state, stage.name)
+            verify_message += wrist_note
             executed_messages.append(verify_message)
             if not verify_ok:
                 return False, "execution stopped after arm motion: " + " -> ".join(executed_messages)
