@@ -14,6 +14,7 @@ DEFAULT_TOP_K="${DEFAULT_TOP_K:-8}"
 DETECT_CALL_TIMEOUT_S="${DETECT_CALL_TIMEOUT_S:-180}"
 PLAN_CALL_TIMEOUT_S="${PLAN_CALL_TIMEOUT_S:-180}"
 EXECUTE_CALL_TIMEOUT_S="${EXECUTE_CALL_TIMEOUT_S:-300}"
+SERVICE_WAIT_TIMEOUT_S="${SERVICE_WAIT_TIMEOUT_S:-90}"
 VERIFY_BOARD_BEFORE_EXECUTE="${VERIFY_BOARD_BEFORE_EXECUTE:-true}"
 EXECUTION_BACKEND="${EXECUTION_BACKEND:-feedback}"
 WRIST_REFINE_BEFORE_GRASP="${WRIST_REFINE_BEFORE_GRASP:-false}"
@@ -87,6 +88,10 @@ ensure_runtime_config() {
 
 start_stack() {
   ensure_dirs
+  if service_available "/${side}_grasp/plan_grasp"; then
+    echo "${side} grasp stack already advertising /${side}_grasp/plan_grasp"
+    return
+  fi
   ensure_runtime_config
   if [[ -s "${PID_DIR}/grasp_${side}.pid" ]] && kill -0 "$(cat "${PID_DIR}/grasp_${side}.pid")" 2>/dev/null; then
     echo "${side} grasp stack already running: pid $(cat "${PID_DIR}/grasp_${side}.pid")"
@@ -152,15 +157,33 @@ stop_stack() {
 wait_for_service() {
   source_ros
   local service="$1"
-  local deadline=$((SECONDS + 45))
+  local timeout_s="${2:-${SERVICE_WAIT_TIMEOUT_S}}"
+  local deadline=$((SECONDS + timeout_s))
   until ros2 service list | grep -qx "${service}"; do
     if (( SECONDS > deadline )); then
-      echo "service not available: ${service}" >&2
+      echo "service not available after ${timeout_s}s: ${service}" >&2
       tail -80 "${LOG_DIR}/${side}_grasp_stack.log" >&2 || true
       exit 1
     fi
     sleep 1
   done
+}
+
+service_available() {
+  source_ros
+  local service="$1"
+  ros2 service list | grep -qx "${service}"
+}
+
+ensure_stack_service() {
+  local service="$1"
+  ensure_dirs
+  if service_available "${service}"; then
+    return
+  fi
+  echo "${side} grasp stack is not advertising ${service}; starting stack..."
+  start_stack
+  wait_for_service "${service}"
 }
 
 wait_for_runtime_tf() {
@@ -257,8 +280,8 @@ apply_planner_runtime_params() {
 
 detect() {
   ensure_dirs
+  ensure_stack_service "/${side}_grasp/detect_grasps"
   source_ros
-  wait_for_service "/${side}_grasp/detect_grasps"
   wait_for_runtime_tf 20
   call_ros_service "${DETECT_CALL_TIMEOUT_S}" "${LOG_DIR}/${side}_detect_grasps.txt" \
     "/${side}_grasp/detect_grasps" so101_grasp_msgs/srv/DetectGrasps \
@@ -267,8 +290,8 @@ detect() {
 
 plan() {
   ensure_dirs
+  ensure_stack_service "/${side}_grasp/plan_grasp"
   source_ros
-  wait_for_service "/${side}_grasp/plan_grasp"
   wait_for_runtime_tf 20
   apply_planner_runtime_params
   echo "execution_backend=${EXECUTION_BACKEND}"
@@ -382,8 +405,8 @@ execute_grasp() {
     echo "operator declined execution"
     exit 1
   fi
+  ensure_stack_service "/${side}_grasp/plan_grasp"
   source_ros
-  wait_for_service "/${side}_grasp/plan_grasp"
   wait_for_runtime_tf 20
   apply_planner_runtime_params
   ros2 param set "/${side}_grasp/grasp_planner_node" wrist_refine_before_grasp "${WRIST_REFINE_BEFORE_GRASP}" >/dev/null
