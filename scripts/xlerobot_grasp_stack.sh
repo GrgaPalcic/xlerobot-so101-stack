@@ -15,7 +15,10 @@ DETECT_CALL_TIMEOUT_S="${DETECT_CALL_TIMEOUT_S:-180}"
 PLAN_CALL_TIMEOUT_S="${PLAN_CALL_TIMEOUT_S:-180}"
 EXECUTE_CALL_TIMEOUT_S="${EXECUTE_CALL_TIMEOUT_S:-300}"
 VERIFY_BOARD_BEFORE_EXECUTE="${VERIFY_BOARD_BEFORE_EXECUTE:-true}"
-BOARD_VERIFY_MAX_MEAN_PX="${BOARD_VERIFY_MAX_MEAN_PX:-3.0}"
+BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX="${BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX:-8.0}"
+BOARD_VERIFY_MIN_MARKERS="${BOARD_VERIFY_MIN_MARKERS:-8}"
+BOARD_VERIFY_MIN_INLIER_POINTS="${BOARD_VERIFY_MIN_INLIER_POINTS:-24}"
+BOARD_VERIFY_MAX_MEAN_PX="${BOARD_VERIFY_MAX_MEAN_PX:-4.5}"
 BOARD_VERIFY_MAX_TRANSLATION_M="${BOARD_VERIFY_MAX_TRANSLATION_M:-0.05}"
 BOARD_VERIFY_MAX_ROTATION_DEG="${BOARD_VERIFY_MAX_ROTATION_DEG:-8.0}"
 EXECUTE_SIDE="${EXECUTE_SIDE:-right}"
@@ -212,9 +215,11 @@ verify_board() {
     --start-id "$(state_value world_start_id)" \
     --marker-count "$(state_value world_marker_count)" \
     --aruco-dict "$(state_value world_dict)" \
-    --min-markers 8 | tee "${out_dir}/solve_${stamp}.log"
+    --min-markers "${BOARD_VERIFY_MIN_MARKERS}" \
+    --pnp-reprojection-error-px "${BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX}" | tee "${out_dir}/solve_${stamp}.log"
   python3 - "${XLEROBOT_RUN}/extrinsics/center_gopro_in_world.yaml" "${output}" \
-    "${BOARD_VERIFY_MAX_MEAN_PX}" "${BOARD_VERIFY_MAX_TRANSLATION_M}" "${BOARD_VERIFY_MAX_ROTATION_DEG}" <<'PY'
+    "${BOARD_VERIFY_MAX_MEAN_PX}" "${BOARD_VERIFY_MAX_TRANSLATION_M}" "${BOARD_VERIFY_MAX_ROTATION_DEG}" \
+    "${BOARD_VERIFY_MIN_MARKERS}" "${BOARD_VERIFY_MIN_INLIER_POINTS}" <<'PY'
 import math, sys, yaml
 import numpy as np
 
@@ -223,6 +228,8 @@ new = yaml.safe_load(open(sys.argv[2], "r", encoding="utf-8"))
 max_mean = float(sys.argv[3])
 max_translation = float(sys.argv[4])
 max_rotation = math.radians(float(sys.argv[5]))
+min_markers = int(sys.argv[6])
+min_inliers = int(sys.argv[7])
 
 def mat(data):
     t = data["transform"]
@@ -237,10 +244,28 @@ delta = np.linalg.inv(base_m) @ new_m
 translation = float(np.linalg.norm(delta[:3, 3]))
 trace = float(np.clip((np.trace(delta[:3, :3]) - 1.0) * 0.5, -1.0, 1.0))
 rotation = float(math.acos(trace))
-mean = float(new.get("quality", {}).get("mean_reprojection_error_px", 999.0))
-print(f"board verify: mean={mean:.3f}px translation_delta={translation:.4f}m rotation_delta={math.degrees(rotation):.2f}deg")
-if mean > max_mean or translation > max_translation or rotation > max_rotation:
-    raise SystemExit("board verification failed")
+quality = new.get("quality", {})
+markers = int(quality.get("detected_markers", 0))
+inliers = int(quality.get("inlier_points", 0))
+total = int(quality.get("total_points", 0))
+mean = float(quality.get("mean_reprojection_error_px", 999.0))
+print(
+    f"board verify: markers={markers} inliers={inliers}/{total} mean={mean:.3f}px "
+    f"translation_delta={translation:.4f}m rotation_delta={math.degrees(rotation):.2f}deg"
+)
+reasons = []
+if markers < min_markers:
+    reasons.append(f"markers {markers} < {min_markers}")
+if inliers < min_inliers:
+    reasons.append(f"inlier points {inliers} < {min_inliers}")
+if mean > max_mean:
+    reasons.append(f"mean reprojection {mean:.3f}px > {max_mean:.3f}px")
+if translation > max_translation:
+    reasons.append(f"translation delta {translation:.4f}m > {max_translation:.4f}m")
+if rotation > max_rotation:
+    reasons.append(f"rotation delta {math.degrees(rotation):.2f}deg > {math.degrees(max_rotation):.2f}deg")
+if reasons:
+    raise SystemExit("board verification failed: " + "; ".join(reasons))
 PY
 }
 

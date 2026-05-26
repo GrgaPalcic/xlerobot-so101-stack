@@ -266,6 +266,7 @@ def _solve_pnp(
     image_points: np.ndarray,
     camera_matrix: np.ndarray,
     dist_coeffs: np.ndarray,
+    reprojection_error_px: float = 4.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     ok, rvec, tvec, inliers = cv2.solvePnPRansac(
         object_points,
@@ -273,7 +274,7 @@ def _solve_pnp(
         camera_matrix,
         dist_coeffs,
         iterationsCount=200,
-        reprojectionError=4.0,
+        reprojectionError=reprojection_error_px,
         confidence=0.999,
         flags=cv2.SOLVEPNP_ITERATIVE,
     )
@@ -366,6 +367,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--marker-count", type=int, default=44)
     parser.add_argument("--aruco-dict", default="DICT_5X5_100")
     parser.add_argument("--min-markers", type=int, default=8)
+    parser.add_argument(
+        "--pnp-reprojection-error-px",
+        type=float,
+        default=4.0,
+        help="RANSAC inlier threshold for solvePnP. Wide-FOV or partially occluded verification images may need 6-10 px.",
+    )
     return parser.parse_args()
 
 
@@ -399,7 +406,13 @@ def main() -> int:
         obj_by_id,
         args.min_markers,
     )
-    rvec, tvec, inlier_idx = _solve_pnp(object_points, image_points, camera_matrix, dist_coeffs)
+    rvec, tvec, inlier_idx = _solve_pnp(
+        object_points,
+        image_points,
+        camera_matrix,
+        dist_coeffs,
+        args.pnp_reprojection_error_px,
+    )
     mean_err, max_err = _reprojection_error(
         object_points[inlier_idx],
         image_points[inlier_idx],

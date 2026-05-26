@@ -1173,6 +1173,13 @@ command runs a fixed-board GoPro/ChArUco verification before motion and then
 requires typing `EXECUTE`. That check catches world/camera drift; the
 wrist-refine stage re-detects the object before descent.
 
+The verification solve still uses the calibrated GoPro intrinsics at the same
+image size. The `BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX` environment variable
+only controls the live solvePnP RANSAC inlier gate. If a cube or wrist camera
+mount covers part of the small 7 x 5 board, too strict a gate can leave too few
+corners and produce a false large-pose jump. Review the saved
+`grasp/<side>/board_verify/*overlay*.jpg` if marker or inlier counts are low.
+
 Run one request node per arm side, but keep `base_frame:=world` so the server
 gets both wrist and GoPro views in the same calibrated frame.
 

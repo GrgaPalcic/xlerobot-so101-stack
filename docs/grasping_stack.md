@@ -53,6 +53,14 @@ for that one service call. This board check catches camera/world drift; the
 wrist-refine stage re-detects the object before descent to catch local
 object/arm error.
 
+The board check uses the same GoPro intrinsics and image size as calibration.
+Its `BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX` setting is only the solvePnP
+RANSAC inlier gate for the live verification frame. If the cube or wrist camera
+mounts cover part of the 7 x 5 board, a very strict gate can fit a wrong planar
+pose from too few corners. Keep the board as visible as practical and inspect
+the saved `grasp/<side>/board_verify/*overlay*.jpg` when the verifier reports
+low marker or inlier counts.
+
 Stop the runtime:
 
 ```bash
