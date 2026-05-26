@@ -936,11 +936,22 @@ class GraspPlannerNode(Node):
         base_to_ee = base_to_camera @ ee_to_camera.T
         ee_position = camera_position - base_to_ee @ self._wrist_camera_xyz_in_ee
         ee_position[2] = max(float(ee_position[2]), self._wrist_refine_min_ee_z_m)
+        actual_camera_position = ee_position + base_to_ee @ self._wrist_camera_xyz_in_ee
+        target_in_camera = base_to_camera.T @ (target - actual_camera_position)
 
         matrix = np.eye(4, dtype=np.float64)
         matrix[:3, :3] = base_to_ee
         quat = np.asarray(quaternion_from_matrix(matrix), dtype=np.float64)
         quat = quat / max(float(np.linalg.norm(quat)), 1e-9)
+        self.get_logger().info(
+            "wrist_camera_look: "
+            f"target=({target[0]:.3f},{target[1]:.3f},{target[2]:.3f}) "
+            f"camera=({actual_camera_position[0]:.3f},{actual_camera_position[1]:.3f},"
+            f"{actual_camera_position[2]:.3f}) "
+            f"target_in_camera=({target_in_camera[0]:.3f},{target_in_camera[1]:.3f},"
+            f"{target_in_camera[2]:.3f}) "
+            f"ee=({ee_position[0]:.3f},{ee_position[1]:.3f},{ee_position[2]:.3f})"
+        )
         return PrimitiveStage("wrist_camera_look", pose=self._make_pose(ee_position, quat))
 
     def _wrist_refine_view_stages(self, selection: PlanSelection) -> list[PrimitiveStage]:
@@ -1893,6 +1904,7 @@ class GraspPlannerNode(Node):
         open_first: bool = True,
         confirmation_target: np.ndarray | None = None,
         planned_stages: list[PlannedStage] | None = None,
+        refresh_before_descent: bool = True,
     ) -> tuple[bool, str]:
         executed_messages: list[str] = []
         if open_first:
@@ -1910,7 +1922,7 @@ class GraspPlannerNode(Node):
                 prompt=prompt,
                 top_k=top_k,
                 executed_messages=executed_messages,
-                refresh_before_descent=True,
+                refresh_before_descent=refresh_before_descent,
                 confirmation_target=confirmation_target,
             )
         elif planned_stages is None:
@@ -1919,7 +1931,7 @@ class GraspPlannerNode(Node):
                 prompt=prompt,
                 top_k=top_k,
                 executed_messages=executed_messages,
-                refresh_before_descent=True,
+                refresh_before_descent=refresh_before_descent,
                 confirmation_target=confirmation_target,
             )
         else:
@@ -1928,7 +1940,7 @@ class GraspPlannerNode(Node):
                 prompt=prompt,
                 top_k=top_k,
                 executed_messages=executed_messages,
-                refresh_before_descent=True,
+                refresh_before_descent=refresh_before_descent,
                 confirmation_target=confirmation_target,
             )
         if not arm_ok:
@@ -2100,6 +2112,7 @@ class GraspPlannerNode(Node):
             top_k=refine_top_k,
             open_first=False,
             planned_stages=refined_selection.planned_stages,
+            refresh_before_descent=False,
         )
         prefix = (
             "wrist-refined grasp: "

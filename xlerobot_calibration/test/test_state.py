@@ -340,5 +340,6 @@ def test_generate_grasp_runtime_config(tmp_path: Path):
     assert planner["support_plane_point_xyz"] == [0.0, 0.0, 0.0]
     assert planner["support_plane_normal_xyz"] == [0.0, 0.0, -1.0]
     assert planner["close_surface_clearance_m"] == 0.003
+    assert planner["wrist_refine_before_grasp"] is True
     assert "left/arm_trajectory_controller" in (out / "config/left_moveit_controllers.yaml").read_text()
     assert "/left/joint_states" in (out / "config/left_moveit_py_config.yaml").read_text()

@@ -1345,7 +1345,7 @@ def generate_grasp_runtime_config(state: dict[str, Any]) -> list[Path]:
                     "wrist_confirmation_before_descent": True,
                     "require_wrist_confirmation_for_execution": False,
                     "require_wrist_cloud_for_execution": False,
-                    "wrist_refine_before_grasp": False,
+                    "wrist_refine_before_grasp": True,
                     "wrist_refine_max_xy_shift_m": 0.08,
                     "wrist_refine_max_z_shift_m": 0.10,
                     "wrist_camera_xyz_in_ee": wrist_translation,
