@@ -68,9 +68,11 @@ start_server() {
   fi
   (
     cd "${REPO_ROOT}"
-    HOST=127.0.0.1 PORT="${LOCAL_PORT}" scripts/run_grasp_server.sh
-  ) >"${LOG_DIR}/grasp_server.log" 2>&1 &
-  echo $! > "${PID_DIR}/grasp_server.pid"
+    nohup env HOST=127.0.0.1 PORT="${LOCAL_PORT}" \
+      "${REPO_ROOT}/scripts/run_grasp_server.sh" \
+      >"${LOG_DIR}/grasp_server.log" 2>&1 </dev/null &
+    echo $! > "${PID_DIR}/grasp_server.pid"
+  )
   echo "started grasp server: pid $(cat "${PID_DIR}/grasp_server.pid"), log ${LOG_DIR}/grasp_server.log"
 }
 
@@ -86,12 +88,12 @@ start_tunnel() {
     stop_stale_tunnel
     sleep 1
   fi
-  ssh -N -T \
+  nohup ssh -N -T \
     -o ExitOnForwardFailure=yes \
     -o ServerAliveInterval=30 \
     -o ServerAliveCountMax=4 \
     -R "${REMOTE_PORT}:127.0.0.1:${LOCAL_PORT}" \
-    "${DELL_HOST}" >"${LOG_DIR}/grasp_tunnel.log" 2>&1 &
+    "${DELL_HOST}" >"${LOG_DIR}/grasp_tunnel.log" 2>&1 </dev/null &
   echo $! > "${PID_DIR}/grasp_tunnel.pid"
   sleep 1
   if ! kill -0 "$(cat "${PID_DIR}/grasp_tunnel.pid")" 2>/dev/null; then
