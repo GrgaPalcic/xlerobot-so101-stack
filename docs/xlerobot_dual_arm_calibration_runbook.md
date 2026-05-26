@@ -1219,6 +1219,11 @@ when they agree with overhead and as pre-descent diagnostics. If the GPU log
 reports `single_wrist:metric_untrusted`, treat the wrist result as untrusted
 and inspect masks/depth/TF before enabling hard wrist gates.
 
+For GG-CNN candidates, the ROS planner prefers the GG-CNN grasp peak as the
+XY target. Object-cloud median targets remain fallback options, but they can be
+centimeters off on small objects if the mask includes table, shadow, or handle
+pixels.
+
 The verification solve still uses the calibrated GoPro intrinsics at the same
 image size. The `BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX` environment variable
 only controls the live solvePnP RANSAC inlier gate. If a cube or wrist camera

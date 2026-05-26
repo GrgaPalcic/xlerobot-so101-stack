@@ -102,6 +102,11 @@ for eye-in-hand agreement. If the GPU log says `single_wrist:metric_untrusted`,
 the views disagreed too much for safe fusion; treat the wrist result as
 untrusted and inspect masks/depth/TF before enabling hard wrist gates.
 
+For GG-CNN candidates, the ROS planner prefers the GG-CNN grasp peak as the
+XY target. Object-cloud median targets remain fallback options, but they can be
+centimeters off on small objects when the segmentation mask includes table,
+shadow, or handle pixels.
+
 The board check uses the same GoPro intrinsics and image size as calibration.
 Its `BOARD_VERIFY_PNP_REPROJECTION_ERROR_PX` setting is only the solvePnP
 RANSAC inlier gate for the live verification frame. If the cube or wrist camera

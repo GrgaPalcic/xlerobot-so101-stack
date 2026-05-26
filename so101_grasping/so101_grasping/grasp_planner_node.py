@@ -969,7 +969,11 @@ class GraspPlannerNode(Node):
         orientation_options = self._grasp_orientation_options(rotation, max_yaws=4)
 
         options: list[tuple[str, list[PrimitiveStage]]] = []
-        target_options = self._prefer_cloud_targets(self._target_position_options(grasp))
+        # GG-CNN already returns a grasp peak in image space. The object-cloud
+        # median is useful as a fallback, but on small objects it can shift the
+        # target by centimeters if the mask includes table, shadow, or handle
+        # pixels.
+        target_options = self._target_position_options(grasp)
         for target_label, target in target_options:
             for orientation_label, quat in orientation_options:
                 surface_stages = self._surface_relative_stages(
