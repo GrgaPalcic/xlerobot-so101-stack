@@ -1566,7 +1566,29 @@ class GraspPlannerNode(Node):
             wrist_delta = self._trajectory_wrist_roll_delta(plan_result, reference_wrist_roll)
             wrist_reject_reason = self._wrist_roll_reject_reason(wrist_delta)
             if wrist_reject_reason is not None:
-                return False, f"execution stopped at {stage.name}: {plan_source} {wrist_reject_reason}"
+                if index > 0 and plan_source == "live-replanned":
+                    fallback_delta = self._trajectory_wrist_roll_delta(stage.result, reference_wrist_roll)
+                    fallback_reject_reason = self._wrist_roll_reject_reason(fallback_delta)
+                    if fallback_reject_reason is None:
+                        self.get_logger().warning(
+                            f"{stage.name}: live replan rejected ({wrist_reject_reason}); "
+                            "falling back to selected preplanned stage"
+                            f"{self._wrist_roll_note(fallback_delta)}"
+                        )
+                        plan_result = stage.result
+                        expected_state = self._state_from_plan_end(plan_result, self._current_robot_state())
+                        plan_source = "preplanned-fallback"
+                        plan_message = ""
+                        wrist_delta = fallback_delta
+                        wrist_reject_reason = None
+                    else:
+                        return (
+                            False,
+                            f"execution stopped at {stage.name}: live-replanned {wrist_reject_reason}; "
+                            f"preplanned fallback also rejected: {fallback_reject_reason}",
+                        )
+                if wrist_reject_reason is not None:
+                    return False, f"execution stopped at {stage.name}: {plan_source} {wrist_reject_reason}"
             wrist_note = self._wrist_roll_note(wrist_delta)
             if plan_message:
                 self.get_logger().info(f"{stage.name}: {plan_message}{wrist_note}")
